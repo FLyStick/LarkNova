@@ -1,73 +1,168 @@
-# 飞书 Agent 后端（MVP）
+# LarkNova 企业飞书知识 Agent
 
-一个最小可运行的后端：拉取飞书群聊历史消息 → 写入 SQLite → 通过本地 HTTP API
-对外提供查询。飞书侧复用本机已安装的 `lark-cli`，因此不需要额外集成 SDK，
-代码只使用 Python 标准库。
+LarkNova 是在现有飞书消息同步 MVP 基础上迭代的**企业飞书知识 Agent**：
 
-## 方案结论
+开放平台接入 → 数据底座 → 知识图谱 → Agent/Harness 编排 → 可信评测 → 业务闭环。
 
-采用「机器人身份」方案可行，且正好满足“只归纳机器人所在群聊”的需求：
+当前阶段：`M1 数据管道生产化`（进行中，user 身份基线）。
+由于机器人暂无法加入测试群，项目按 `LARK_IDENTITY=user` 继续推进；
+bot 权限窗口已预留，代码侧不依赖 bot 身份完成数据管道，权限开通后补验。
 
-1. 机器人通过 `im +chat-list --as bot` 枚举自己加入的群聊。
-2. 定时或首次拉取每个群的聊天记录，原始消息写入 `messages` 表。
-3. AI 模块基于 `messages` 做归纳，结果写入 `summaries` 表。
-4. 前端通过 HTTP API 查询原始消息或 AI 归纳结果。
+## 目标架构
 
-当前唯一阻塞点：应用缺少 `im:message:readonly` 权限，机器人身份拉取消息返回
-`230027`。开启权限后，将 `LARK_IDENTITY=bot` 重启服务即可切换为纯机器人身份。
+```text
+飞书开放平台（lark-cli / 事件订阅）
+        │
+        ▼
+M1 数据底座：同步、清洗、编辑/撤回、迁移、失败隔离、数据边界
+        │
+        ▼
+M2 知识层：thread/话题切分、FTS5 + 向量索引、实体与关系知识图谱
+        │
+        ▼
+M3 AI 摘要：结论 + 依据 + 待办、增量摘要、token 预算
+        │
+        ▼
+M4 Agent + Harness：LangGraph 编排、MCP 工具、降级与 trace
+        │
+        ▼
+M5 评测闭环：黄金测试集、检索/问答指标、Badcase 迭代
+        │
+        ▼
+M6 交付：文档、Demo、pytest、resume_metrics.json
+```
 
-## 当前测试状态
+## 当前现状
 
-- 测试群：`飞书Agent测试群`
-  - chat_id：`oc_11404e974de3daf54122b117e907d177`
-  - 群成员：蒋林（open_id `ou_6bad0b5a57b571a7315ee8d6f5044a69`）
-  - 机器人：十三的codex，open_id `ou_a2054e868f3d65dbedbb9e8b877c05e8`
-- 本地库当前为 4 个会话、480 条消息，其中测试群 4 条。
-- 机器人身份可以建群、枚举群聊；读取消息因权限 `230027` 暂不可用。
-- 用户身份拉取消息已打通，首次同步和增量同步均验证通过。
-- 拉取消息使用 `--page-all --page-limit 1000`。lark-cli 默认 `--page-limit 10`
-  会把大群历史截断成每次只拉几十条，现已修复。
-- 网络抖动会自动重试；周期同步与手动 `POST /api/sync` 串行执行，避免重复计数。
+- 本地库：4 个会话、482 条消息（其中 2 个历史外部群共 467 条，M0 后不计入业务指标），消息类型含 `text/post/interactive/system` 等。
+- 用户身份同步已打通：全量 + 增量双游标、`message_id` 幂等、单群失败隔离，同步结果写入 `sync_runs`。
+- M1 已完成核心代码：富文本/交互/合并转发归一化、`content_hash`、编辑/撤回审计
+  `message_versions`、DB 迁移机制（v2/v3）、同步指标与 `normalize --rebuild` 重建命令。
+- 机器人身份可枚举群聊，读取消息因缺少 `im:message:readonly` 返回 `230027`。
+- M0 已落地：`FEISHU_AGENT_ALLOWED_CHAT_IDS` 白名单、外部群默认排除、
+  `python -m feishu_agent.main doctor` 可一键检测权限与数据边界，`boundary` 可审计/清理历史越界数据；
+  M0 代码已完成，bot 实跑等待权限。
+
+## 第一阶段 M0/M1 验收清单
+
+```text
+[x] 白名单外部群/非白名单群不入库
+[x] doctor 可诊断权限、白名单缺失、外部群
+[x] boundary 可审计/清理历史越界数据
+[x] 富文本/交互/合并转发归一化，主要消息类型有测试
+[x] message_versions 编辑/撤回审计，重建幂等
+[x] sync_runs 指标与单群失败隔离
+[x] DB 迁移机制与旧库回填
+[x] 24 项单元测试全绿
+[ ] 飞书后台开通 im:message:readonly（权限窗口）
+[ ] LARK_IDENTITY=bot 后 sync 无 230027（权限窗口）
+[ ] 入库会话集合与白名单一致，bot 实跑补验
+```
+
+## 数据存储原则
+
+当前 `messages` 表按“一条消息一行”全量存储，作为事实源是合理的：`message_id`
+主键保证幂等，`raw_json` 保留原文，`content` 提供查询用文本。
+
+后续演进时会把派生数据从事实源拆出来，避免同表三层冗余：
+
+```text
+messages            事实源（单条全量，保留版本）
+message_versions    编辑/撤回审计
+chunks              检索语料单元
+entities/edges      知识图谱
+summaries           结构化摘要
+FTS5 / 向量库        索引层，可重建
+```
 
 ## 目录结构
 
 ```text
 feishu_agent/
-  config.py       环境变量与运行参数
-  feishu/client.py lark-cli 封装（会话 + 消息）
-  database/db.py  SQLite 表结构与查询
-  sync/runner.py  首次同步与增量同步逻辑
-  api/server.py   标准库 HTTP API
-  main.py         CLI 入口
-data/agent.db     本地 SQLite 数据库
+  config.py                     环境变量与运行参数（身份、白名单、外部群策略）
+  feishu/client.py              lark-cli 封装（会话 + 消息）
+  database/db.py                SQLite 表结构与查询
+  database/migrations.py        幂等 DB 迁移（v2/v3）
+  normalize.py                  富文本归一化与内容摘要
+  sync/runner.py                全量/增量同步 + 数据边界过滤 + 失败隔离
+  doctor.py                     bot 权限与数据边界体检
+  boundary.py                   本地库边界审计与显式清理
+  api/server.py                 标准库 HTTP API
+  main.py                       CLI 入口（sync/doctor/boundary/stats/metrics/normalize/serve）
+tests/             第一阶段自动化测试
+docs/ROADMAP.md    分阶段规划与验收
+docs/PLAN.md       详细任务拆解
+data/agent.db      本地 SQLite 数据库（不入库）
 ```
 
-## 数据表
+## 环境变量
 
-- `chats`：群聊基础信息与最近同步时间。
-- `messages`：消息原文、类型、发送者、时间、提及、原始 JSON 等。
-- `sync_state`：每个群的增量游标（最后一条消息 ID / 时间）。
-- `summaries`：预留的 AI 归纳结果表。
+```text
+LARK_IDENTITY=user                      # 权限开通后切换为 bot
+FEISHU_AGENT_ALLOWED_CHAT_IDS=          # 内部群白名单，逗号分隔；空则放行全部内部群
+FEISHU_AGENT_ALLOW_EXTERNAL_CHATS=0     # 默认排除外部群
+FEISHU_AGENT_DB=data/agent.db
+FEISHU_AGENT_SYNC_INTERVAL=60
+LARK_NODE=node
+LARK_CLI_JS=D:\App\nodejs\node_global\node_modules\@larksuite\cli\scripts\run.js
+```
+
+完整说明见 `.env.example`。
 
 ## 使用方法
 
-在 Windows PowerShell 中执行：
+Windows PowerShell：
 
 ```powershell
-# 复制环境变量默认值（可选，所有配置都有默认值）
 copy .env.example .env
+# 程序启动时自动读取项目根目录 .env；真实环境变量优先。
 
-# 首次同步 / 手动拉取
+# 体检：身份能否枚举群聊、机器人能否读消息、白名单/外部群是否生效
+python -m feishu_agent.main doctor --identity user
+
+# 审计本地库中的历史越界数据（默认不删除）
+python -m feishu_agent.main boundary
+
+# 确认后清理本地库中的外部群/非白名单群
+python -m feishu_agent.main boundary --prune --yes
+
+# 首次/增量同步（当前以 user 身份为基线）
 python -m feishu_agent.main sync --identity user
 
-# 只同步指定群
+# 只同步指定群（仍受白名单约束）
 python -m feishu_agent.main sync --identity user `
   --chat-id oc_11404e974de3daf54122b117e907d177
 
-# 启动 HTTP API：启动时先同步一次，之后每 60 秒增量同步
+# 查看本地库统计
+python -m feishu_agent.main stats
+
+# 查看同步指标与最近运行记录
+python -m feishu_agent.main metrics
+
+# 检查/重建消息归一化结果（旧库迁移后也可执行）
+python -m feishu_agent.main normalize
+python -m feishu_agent.main normalize --rebuild
+
+# 启动 HTTP API，启动时同步一次，之后每 60 秒增量同步
 python -m feishu_agent.main serve --port 8080 `
   --interval 60 --sync-on-start --identity user
+
+# bot 权限开通且机器人加入白名单群后，再做一次复验
+python -m feishu_agent.main doctor --identity bot
+python -m feishu_agent.main sync --identity bot
 ```
+
+## 测试
+
+第一阶段测试使用标准库 `unittest`，无需安装第三方依赖：
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+覆盖内容：白名单过滤、外部群排除、显式 `--chat-id` 仍受白名单约束、
+`doctor` 对 `230027` 的识别与修复提示、`boundary` 本地审计/清理、消息幂等写入、
+归一化、编辑/撤回审计、DB 迁移回填、同步指标与单群失败隔离。
 
 ## API 接口
 
@@ -77,19 +172,16 @@ GET  /api/chats
 GET  /api/messages?chat_id=oc_xxx&q=关键词&msg_type=text&limit=50
 GET  /api/stats
 POST /api/sync   {"full": false}
+GET  /api/metrics?limit=10
+GET  /api/sync-runs?limit=20
+GET  /api/message-versions?message_id=om_xxx&limit=100
 ```
 
-示例：
+## 后续阶段
 
-```bash
-curl "http://127.0.0.1:8080/api/messages?chat_id=oc_11404e974de3daf54122b117e907d177&limit=20"
-```
+M2 主题组织与索引：thread/话题切分、chunk、FTS5 + 向量、知识图谱、增量索引。
+ M4 Agent + Harness：LangGraph、MCP 工具、降级与 trace。
+M5 评测闭环：黄金测试集、检索/问答指标、Badcase 迭代。
+M6 交付与简历固化：README、Demo、可复现指标。
 
-## 下一步
-
-1. 在飞书开发者后台（https://open.feishu.cn/app/cli_aaf825fe1ef81d06/permission）
-   开启 `im:message:readonly`，设置 `LARK_IDENTITY=bot` 后重新同步，验证机器人
-   只能读到它所在群的消息。
-2. 基于 `messages` 表实现 AI 归纳模块，结果写入 `summaries`。
-3. 增加面向 Agent/前端的查询接口，支持按群、时间、发送者、消息类型过滤，并返回
-   归纳后的上下文。
+详细规划和验收标准见 `docs/ROADMAP.md`。

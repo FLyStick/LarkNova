@@ -13,6 +13,13 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
     return values[0] if values else None
 
 
+def _first_int(query: dict[str, list[str]], key: str, default: int) -> int:
+    try:
+        return int(_first(query, key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "FeishuAgent/0.1"
 
@@ -34,6 +41,37 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "messages": self._query_messages(parsed.query)})
         elif route == "/api/stats":
             self._send_json({"ok": True, **self._new_db().stats()})
+        elif route == "/api/metrics":
+            query = urllib.parse.parse_qs(parsed.query)
+            self._send_json(
+                {
+                    "ok": True,
+                    **self._new_db().metrics(
+                        limit=_first_int(query, "limit", 10)
+                    ),
+                }
+            )
+        elif route == "/api/sync-runs":
+            query = urllib.parse.parse_qs(parsed.query)
+            self._send_json(
+                {
+                    "ok": True,
+                    "runs": self._new_db().recent_sync_runs(
+                        limit=_first_int(query, "limit", 20)
+                    ),
+                }
+            )
+        elif route == "/api/message-versions":
+            query = urllib.parse.parse_qs(parsed.query)
+            self._send_json(
+                {
+                    "ok": True,
+                    "versions": self._new_db().list_message_versions(
+                        message_id=_first(query, "message_id"),
+                        limit=_first_int(query, "limit", 100),
+                    ),
+                }
+            )
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 

@@ -5,6 +5,31 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+def _load_dotenv(path: Path) -> None:
+    """Load KEY=VALUE pairs without overriding variables already in env."""
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8-sig")
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or key in os.environ:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+_load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 class Settings:
     """Runtime settings loaded from environment variables."""
@@ -22,6 +47,15 @@ class Settings:
         # blocked by a missing app scope (230027). Switch to bot after enabling
         # im:message:readonly in the Feishu developer console.
         self.identity = os.environ.get("LARK_IDENTITY", "user")
+        raw_allowed = os.environ.get("FEISHU_AGENT_ALLOWED_CHAT_IDS", "").strip()
+        self.allowed_chat_ids: set[str] | None = (
+            {part.strip() for part in raw_allowed.replace(";", ",").split(",") if part.strip()}
+            if raw_allowed
+            else None
+        )
+        self.allow_external_chats = _parse_bool(
+            os.environ.get("FEISHU_AGENT_ALLOW_EXTERNAL_CHATS", "0")
+        )
         self.sync_interval = int(os.environ.get("FEISHU_AGENT_SYNC_INTERVAL", "60"))
         self.sync_timeout = int(os.environ.get("FEISHU_AGENT_SYNC_TIMEOUT", "180"))
         self.host = os.environ.get("FEISHU_AGENT_HOST", "127.0.0.1")
