@@ -42,12 +42,14 @@ class SyncRunner:
         identity: str = "user",
         allowed_chat_ids: set[str] | None = None,
         allow_external: bool = False,
+        summary_factory=None,
     ) -> None:
         self.client = client
         self.db = db
         self.identity = identity
         self.allowed_chat_ids = set(allowed_chat_ids) if allowed_chat_ids else None
         self.allow_external = allow_external
+        self.summary_factory = summary_factory
         self._sync_lock = threading.Lock()
 
     def sync_all(
@@ -71,6 +73,7 @@ class SyncRunner:
                 "messages_restored": 0,
                 "errors": [],
                 "index": None,
+                "summary": None,
                 "boundary": {
                     "allow_external": self.allow_external,
                     "whitelist": sorted(self.allowed_chat_ids) if self.allowed_chat_ids is not None else [],
@@ -130,6 +133,7 @@ class SyncRunner:
             )
             result["chats_failed"] = len(result["errors"])
             result["index"] = self._incremental_index(chat_ids)
+            result["summary"] = self._incremental_summary(chat_ids)
             self.db.record_sync_run(result)
             return result
 
@@ -137,6 +141,18 @@ class SyncRunner:
         """Refresh the derived index after sync without blocking sync failures."""
         try:
             return IndexRepository(self.db).incremental(
+                chat_ids=chat_ids,
+                allowed_chat_ids=self.allowed_chat_ids,
+            )
+        except Exception as exc:
+            return {"mode": "incremental", "built": False, "error": str(exc)}
+
+    def _incremental_summary(self, chat_ids: list[str] | None) -> dict[str, Any] | None:
+        """Refresh summaries after indexing without blocking sync failures."""
+        if self.summary_factory is None:
+            return None
+        try:
+            return self.summary_factory().incremental(
                 chat_ids=chat_ids,
                 allowed_chat_ids=self.allowed_chat_ids,
             )

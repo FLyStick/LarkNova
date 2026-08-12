@@ -14,22 +14,25 @@
 **已有基础（可直接复用）**
 
 - lark-cli 封装：`subprocess` 调用、JSON 解析、网络抖动重试、user/bot 双身份参数。
-- 数据表：`chats`、`messages`、`sync_state`、`summaries`（预留）。
+- 数据表：`chats`、`messages`、`sync_state`、`summaries`（M3 已落地）。
 - 同步能力：全量/增量同步、消息时间游标、upsert 兼容编辑与撤回、同步互斥锁。
 - API：`/health`、`/api/chats`、`/api/messages`、`/api/stats`、`/api/sync`。
-- 真实数据：2 个内部群、15 条消息（其中 5 条可索引），含 `text/system` 等类型。
+- 真实数据：2 个内部群、22 条消息（其中 12 条可索引），含 `text/system` 等类型。
 - M1 核心代码：`normalize` 归一化、`message_versions` 审计、`sync_runs` 指标、
   单群失败隔离、DB 迁移（v2/v3）与 `normalize --rebuild` 已实现。
 - M2 核心代码：chunk、FTS5 BM25、稀疏 TF-IDF + RRF、规则知识图谱、
-  重建/增量/一致性/搜索/图谱命令与 API、同步后自动增量索引，34 项测试通过。
+  重建/增量/一致性/搜索/图谱命令与 API、同步后自动增量索引。
+- M3 核心代码：rule 确定性摘要 + LLM 可选模式、增量/一致性/状态 CLI 与 API、
+  同步后自动增量摘要，39 项测试通过。
 
 **主要缺口**
 
 - 机器人读取消息权限 `im:message:readonly` 未开通，当前按 `LARK_IDENTITY=user` 运行；
   bot 权限窗口已预留，机器人入群后完成复验。
 - 本地库存在 2 个历史外部群样本，M0 已提供 `boundary` 审计与显式确认清理命令。
-- 富文本已归一化并保留原始 JSON；M2 派生索引已建立，M3 摘要及后续 AI 能力尚未开始。
-- 尚未建立 AI 摘要、Agent 工作流、评测集和部署能力。
+- 富文本已归一化并保留原始 JSON；M2 派生索引、M3 结构化摘要已建立，
+  M4 Agent 与后续 AI 能力尚未开始。
+- 尚未建立 Agent 工作流、评测集和部署能力。
 
 ## 3. 阶段总览
 
@@ -100,7 +103,7 @@ M1 当前进度（2026-08-11，user 身份基线）：
 
 ### M2 主题组织与索引
 
-当前状态：已完成 user 身份基线（2026-08-11），bot 权限开通后复验。
+当前状态：已完成 user 身份基线（2026-08-12），bot 权限开通后复验。
 
 任务：
 
@@ -118,7 +121,7 @@ M1 当前进度（2026-08-11，user 身份基线）：
 - 检索返回结果带可追溯字段（`message_id/chat_id/create_time/sender`）。
 - 索引重建与检索接口通过自动化测试。
 
-M2 当前进度（2026-08-11，user 身份基线）：
+M2 当前进度（2026-08-12，user 身份基线）：
 
 - [x] `index/chunker.py`：thread + 时间窗口 + 消息数/字符上限生成 chunk。
 - [x] `index/tokenizer.py`：中文 bigram + ASCII token，FTS5 安全编码。
@@ -131,9 +134,9 @@ M2 当前进度（2026-08-11，user 身份基线）：
 - [x] `sync/runner.py` 同步后自动增量索引，索引失败不影响同步结果。
 - [x] 新增 API：`/api/search`、`/api/graph/entities`、`/api/graph/entity`、
   `/api/index/status`、`/api/index/rebuild`、`/api/index/incremental`。
-- [x] 真实库验收：rebuild 为 2 群 / 15 消息 / 5 可索引 / 2 chunks；
-  consistency=true；中文检索可溯源；graph stats 为 4 实体 / 12 mentions / 10 边。
-- [x] 34 项单元测试全绿。
+- [x] 真实库验收：rebuild 为 2 群 / 22 消息 / 12 可索引 / 3 chunks；
+  consistency=true；中文检索可溯源；graph stats 为 4 实体 / 26 mentions / 17 边。
+- [x] M2 阶段 34 项单元测试全绿；当前全量 39 项全绿。
 - [ ] bot 权限开通后，用 bot 身份同步并复跑 index consistency/search。
 
 ### M3 AI 摘要与上下文
@@ -151,7 +154,31 @@ M2 当前进度（2026-08-11，user 身份基线）：
 - 对测试群可生成可读摘要，结构字段完整。
 - 同一时间段重复生成结果幂等，不重复追加。
 - 摘要 API 返回数据与 `summaries` 表一致。
-- 摘要质量抽查通过率 >= [待定：80%]，单次成本在预算内。
+- 摘要质量抽查通过率 >= [待定：80%]，单次成本在预算内（LLM 实跑质量抽查随 M5 业务闭环补齐）。
+
+当前状态：已完成 user 身份基线（2026-08-12），bot 权限开通后复验。
+
+M3 当前进度（2026-08-12，user 身份基线）：
+
+- [x] `summary/protocol.py`：摘要结构字段与覆盖范围协议。
+- [x] `summary/budget.py`：上下文构建、`SUMMARY_MAX_CHARS` 与输入/输出 token 预算。
+- [x] `summary/rule_summarizer.py`：确定性规则摘要，
+  输出 conclusion/evidence/todo/key_people/key_dates/entities。
+- [x] `summary/llm_summarizer.py`：OpenAI 兼容 LLM 摘要，
+  未配置端点时报 `SummaryConfigError`（有测试覆盖）。
+- [x] `summary/repository.py`：rebuild/incremental/consistency/status/list，
+  `summary_runs` 记录每次运行。
+- [x] DB 迁移 v5：`summaries`、`summary_runs` 重建；db stats/metrics 增加摘要统计。
+- [x] CLI：`summary rebuild/incremental/list/get/consistency/status`；
+  API：`/api/summaries`、`/api/summaries/status`、
+  `/api/summaries/rebuild`、`/api/summaries/incremental`。
+- [x] `sync/runner.py` 同步后自动增量摘要，摘要失败不影响同步结果。
+- [x] 真实库验收：rebuild 为 2 群 / 22 消息 / 12 可索引 / 3 chunks，
+  生成 2 条摘要；incremental 返回 no_changes；
+  consistency=true；status 为 runs=1、summaries=2、token_estimate=491、fresh=true；
+  metrics 同步显示。
+- [x] 39 项单元测试全绿。
+- [ ] bot 权限开通后，用 bot 身份同步并复跑 summary consistency/status。
 
 ### M4 Agent 应用层
 
@@ -203,14 +230,14 @@ M2 当前进度（2026-08-11，user 身份基线）：
 - 全量测试通过，README 与实现一致。
 - 完成一次面向业务场景的演示，包含问答、引用、拒答和摘要展示。
 
-## 5. 横切事项
+## 6. 横切事项
 
 - 安全：最小权限、内部群白名单、密钥不入库、日志脱敏、鉴权与限流。
 - 数据一致性：同步幂等、索引可重建、摘要幂等、失败可重试。
 - 成本：摘要增量计算、检索结果限制、Rerank 按需启用、token 用量统计。
 - 可维护：统一日志、同步指标、错误码、迁移脚本、README。
 
-## 6. 风险与应对
+## 7. 风险与应对
 
 | 风险 | 影响 | 应对 |
 | --- | --- | --- |
@@ -221,7 +248,7 @@ M2 当前进度（2026-08-11，user 身份基线）：
 | lark-cli 依赖本机 Node | 部署受限 | 抽象 FeishuClient 接口，生产环境可替换为官方 SDK |
 | 大群历史数据量增长 | 同步与索引变慢 | 分页限流、增量同步、批量索引、失败隔离 |
 
-## 7. 执行顺序建议
+## 8. 执行顺序建议
 
 ```text
 M0 ──> M1 ──> M2 ──> M3 ──> M4 ──> M5 ──> M6
@@ -229,4 +256,5 @@ M0 ──> M1 ──> M2 ──> M3 ──> M4 ──> M5 ──> M6
        └── M2/M3 可并行推进    └── M5 与 M4 复用评测接口
 ```
 
-M0 必须最先完成；M1 完成后再进入 M2；M3 与 M2 可并行；M5 可在 M4 跑通后立即开始，避免评测滞后。
+M0 必须最先完成；M1 完成后再进入 M2；M3 与 M2 可并行（当前已随 M2 完成 user 基线）；
+M5 可在 M4 跑通后立即开始，避免评测滞后。

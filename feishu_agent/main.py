@@ -12,6 +12,7 @@ from feishu_agent.database.db import Database
 from feishu_agent.doctor import format_doctor, run_doctor
 from feishu_agent.feishu.client import FeishuClient
 from feishu_agent.index.repository import IndexRepository
+from feishu_agent.summary.repository import SummaryRepository
 from feishu_agent.sync.runner import SyncRunner
 from feishu_agent.boundary import audit_local_db, prune_local_db
 
@@ -34,7 +35,17 @@ def build_runner(settings: Settings, identity: str | None = None) -> SyncRunner:
         identity=identity or settings.identity,
         allowed_chat_ids=settings.allowed_chat_ids,
         allow_external=settings.allow_external_chats,
+        summary_factory=make_summary_factory(settings),
     )
+
+
+def make_summary_factory(settings: Settings):
+    """Return a fresh SummaryRepository over the configured database."""
+    def factory() -> SummaryRepository:
+        db = Database(settings.db_path)
+        db.init()
+        return SummaryRepository(db, settings)
+    return factory
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
@@ -181,6 +192,56 @@ def cmd_graph(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_summary(args: argparse.Namespace) -> int:
+    settings = Settings()
+    db = Database(settings.db_path)
+    db.init()
+    repo = SummaryRepository(db, settings)
+    command = args.summary_command
+    if command == "rebuild":
+        result = repo.rebuild(
+            chat_ids=args.chat_id,
+            allowed_chat_ids=settings.allowed_chat_ids,
+            include_external=args.allow_external,
+            mode=args.mode,
+        )
+    elif command == "incremental":
+        result = repo.incremental(
+            chat_ids=args.chat_id,
+            allowed_chat_ids=settings.allowed_chat_ids,
+            mode=args.mode,
+        )
+    elif command == "list":
+        items = repo.list_summaries(
+            chat_ids=args.chat_id,
+            period_start=args.period_start,
+            period_end=args.period_end,
+            limit=args.limit,
+        )
+        result = {"count": len(items), "summaries": items}
+    elif command == "get":
+        item = repo.get(
+            args.chat_id,
+            period_start=args.period_start,
+            period_end=args.period_end,
+        )
+        result = {"found": item is not None, "summary": item}
+    elif command == "consistency":
+        result = repo.consistency(
+            chat_ids=args.chat_id,
+            allowed_chat_ids=settings.allowed_chat_ids,
+            include_external=args.allow_external,
+        )
+    else:
+        result = repo.status()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if result.get("errors"):
+        return 1
+    if command == "consistency" and not result.get("consistent"):
+        return 2
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     settings = Settings()
     runner = build_runner(settings, args.identity)
@@ -195,6 +256,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         (host, port),
         runner,
         lambda: Database(settings.db_path),
+        summary_factory=make_summary_factory(settings),
     )
 
     if interval and interval > 0:
@@ -290,6 +352,41 @@ def build_parser() -> argparse.ArgumentParser:
     graph_entity = graph_sub.add_parser("entity", help="query an entity by keyword or entity_id")
     graph_entity.add_argument("entity", help="entity value keyword or 64-char entity_id")
     graph_entity.set_defaults(func=cmd_graph)
+
+    summary = sub.add_parser("summary", help="structured AI summaries")
+    summary_sub = summary.add_subparsers(dest="summary_command", required=True)
+
+    summary_rebuild = summary_sub.add_parser("rebuild", help="rebuild rolling summaries per chat")
+    summary_rebuild.add_argument("--mode", default="rule", help="rule or llm")
+    summary_rebuild.add_argument("--allow-external", action="store_true", help="include external chats")
+    summary_rebuild.add_argument("--chat-id", action="append", help="only summarize this chat_id; repeatable")
+    summary_rebuild.set_defaults(func=cmd_summary)
+
+    summary_incremental = summary_sub.add_parser("incremental", help="refresh summaries after index changes")
+    summary_incremental.add_argument("--mode", default="rule", help="rule or llm")
+    summary_incremental.add_argument("--chat-id", action="append", help="only check this chat_id; repeatable")
+    summary_incremental.set_defaults(func=cmd_summary)
+
+    summary_list = summary_sub.add_parser("list", help="list stored summaries")
+    summary_list.add_argument("--chat-id", action="append", help="limit to this chat_id; repeatable")
+    summary_list.add_argument("--period-start", default=None, help="period_start >= value")
+    summary_list.add_argument("--period-end", default=None, help="period_end <= value")
+    summary_list.add_argument("--limit", type=int, default=50, help="max summaries")
+    summary_list.set_defaults(func=cmd_summary)
+
+    summary_get = summary_sub.add_parser("get", help="get the latest summary for one chat")
+    summary_get.add_argument("--chat-id", required=True)
+    summary_get.add_argument("--period-start", default=None)
+    summary_get.add_argument("--period-end", default=None)
+    summary_get.set_defaults(func=cmd_summary)
+
+    summary_consistency = summary_sub.add_parser("consistency", help="verify summaries match indexed messages")
+    summary_consistency.add_argument("--allow-external", action="store_true", help="include external chats")
+    summary_consistency.add_argument("--chat-id", action="append", help="only check this chat_id; repeatable")
+    summary_consistency.set_defaults(func=cmd_summary)
+
+    status_parser = summary_sub.add_parser("status", help="show summary status and counts")
+    status_parser.set_defaults(func=cmd_summary)
 
     serve = sub.add_parser("serve", help="start HTTP API with optional periodic sync")
     serve.add_argument("--host", default=None)

@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from feishu_agent.index.repository import IndexRepository
+from feishu_agent.summary.repository import SummaryRepository
 from feishu_agent.sync.runner import SyncRunner
 
 
@@ -112,6 +113,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
         elif route == "/api/index/status":
             self._send_json({"ok": True, **self._new_index().status()})
+        elif route == "/api/summaries":
+            query = urllib.parse.parse_qs(parsed.query)
+            items = self._new_summary().list_summaries(
+                chat_ids=query.get("chat_id") or None,
+                period_start=_first(query, "period_start"),
+                period_end=_first(query, "period_end"),
+                limit=_first_int(query, "limit", 50),
+            )
+            self._send_json({"ok": True, "count": len(items), "summaries": items})
+        elif route == "/api/summaries/status":
+            self._send_json({"ok": True, **self._new_summary().status()})
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
@@ -139,6 +151,27 @@ class ApiHandler(BaseHTTPRequestHandler):
                 result = self._new_index().incremental(
                     chat_ids=_chat_ids(request),
                     allowed_chat_ids=self.server.runner.allowed_chat_ids,
+                )
+                self._send_json({"ok": True, **result})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
+        elif parsed.path == "/api/summaries/rebuild":
+            try:
+                result = self._new_summary().rebuild(
+                    chat_ids=_chat_ids(request),
+                    allowed_chat_ids=self.server.runner.allowed_chat_ids,
+                    include_external=bool(request.get("allow_external")),
+                    mode=str(request.get("mode") or "rule"),
+                )
+                self._send_json({"ok": True, **result})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
+        elif parsed.path == "/api/summaries/incremental":
+            try:
+                result = self._new_summary().incremental(
+                    chat_ids=_chat_ids(request),
+                    allowed_chat_ids=self.server.runner.allowed_chat_ids,
+                    mode=str(request.get("mode") or "rule"),
                 )
                 self._send_json({"ok": True, **result})
             except Exception as exc:
@@ -178,6 +211,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             return factory()
         return IndexRepository(self._new_db())
 
+    def _new_summary(self) -> SummaryRepository:
+        factory = getattr(self.server, "summary_factory", None)
+        if factory is not None:
+            return factory()
+        return SummaryRepository(self._new_db())
+
     def _send_json(self, obj: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
@@ -199,10 +238,12 @@ class FeishuAgentServer(ThreadingHTTPServer):
         runner: SyncRunner,
         db_factory,
         index_factory=None,
+        summary_factory=None,
     ) -> None:
         self.runner = runner
         self.db_factory = db_factory
         self.index_factory = index_factory
+        self.summary_factory = summary_factory
         super().__init__(addr, ApiHandler)
 
 
@@ -218,5 +259,12 @@ def create_server(
     runner: SyncRunner,
     db_factory,
     index_factory=None,
+    summary_factory=None,
 ) -> FeishuAgentServer:
-    return FeishuAgentServer(addr, runner, db_factory, index_factory)
+    return FeishuAgentServer(
+        addr,
+        runner,
+        db_factory,
+        index_factory,
+        summary_factory,
+    )

@@ -4,10 +4,12 @@
 > 开放平台接入 → 数据底座 → 知识图谱 → Agent/Harness 编排 → 可信评测 → 业务闭环。
 > 本规划同时用于沉淀简历中的技术细节与可复现指标。
 >
-> 当前进度（2026-08-11）：M0 权限与数据边界代码完成，等待 bot 实跑；
-> M1 数据管道生产化已完成 user 身份基线；M2 主题组织与索引核心已完成，
-> 真实库验收为 2 群 / 15 条消息 / 5 条可索引 / 2 个 chunk / 4 实体 / 10 边；
-> 34 项单元测试通过；bot 权限开通后补验。
+> 当前进度（2026-08-12）：M0 权限与数据边界代码完成，等待 bot 实跑；
+> M1 数据管道生产化已完成 user 身份基线；M2 主题组织与索引已完成 user 基线；
+> M3 AI 摘要与上下文已完成 user 基线，真实库验收为
+> 2 群 / 22 条消息 / 12 条可索引 / 3 个 chunk / 4 实体 / 26 mentions / 17 边 /
+> 2 条结构化摘要 / token 估算 491；
+> 39 项单元测试通过；bot 权限开通后补验。
 
 ## 一、规划原则
 
@@ -29,16 +31,16 @@
 | Agent 工具 | 无 | FastMCP 封装飞书/Bitable/检索/图谱工具 |
 | 模型 | 无 | LLM / Embedding 均采用可配置 API（OpenAI 兼容端点） |
 | 评测 | 无 | 自研 eval runner + LLM-as-judge + JSONL trace |
-| 测试 | unittest（24 项） | unittest（34 项）；pytest + 黄金测试集 + 故障注入（M5 起） |
+| 测试 | unittest（24 项） | unittest（39 项）；pytest + 黄金测试集 + 故障注入（M5 起） |
 
 ## 三、分阶段实施与验收
 
 | 里程碑 | 周期 | 主题 | 核心任务 | 交付物 | 验收标准 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | M0 | 0.5-1 天 | 权限与数据边界 | 基线盘点；bot 最小权限；内部群白名单；外部群过滤；doctor 体检；本地边界审计/清理 | `.env.example`、doctor、边界测试 | bot 同步无 `230027`；外部群不入库；doctor/pytest 通过 | 代码完成/等待 bot 实测 |
-| M1 | 3-5 天 | 数据管道生产化 | 富文本归一化；编辑/撤回一致性；同步指标；单群失败隔离；DB 迁移 | 消息解析器、`message_versions`、迁移工具、stats 扩展 | user 基线重建一致且幂等；主要消息类型有测试；bot 权限开通后复验 | 进行中（user 基线核心完成） |
+| M1 | 3-5 天 | 数据管道生产化 | 富文本归一化；编辑/撤回一致性；同步指标；单群失败隔离；DB 迁移 | 消息解析器、`message_versions`、迁移工具、stats 扩展 | user 基线重建一致且幂等；主要消息类型有测试；bot 权限开通后复验 | 已完成（user 基线） |
 | M2 | 3-5 天 | 主题组织与索引 | thread/时间窗口切分；chunk 生成；FTS5 + 稀疏向量；知识图谱 entities/edges；增量索引 | chunks/entities/edges、检索 API | 索引可重建、可溯源、与源库一致；增量只重建变更群；测试全绿 | 已完成（user 基线） |
-| M3 | 3-5 天 | AI 摘要与上下文 | 结论 + 依据 + 待办结构化摘要；增量补充摘要；token 预算 | summaries worker、摘要 API | 摘要幂等；质量抽查 ≥ 85%；成本可控 | 待开始 |
+| M3 | 3-5 天 | AI 摘要与上下文 | 结论 + 依据 + 待办结构化摘要；增量补充摘要；token 预算 | summaries worker、摘要 API | 摘要幂等；质量抽查 ≥ 85%；成本可控 | 已完成（user 基线） |
 | M4 | 5-7 天 | Agent + Harness | LangGraph 编排；MCP/FastMCP 工具；超时、重试、降级、敏感词；trace 与 SSE | `/api/agent/ask`、trace 回放 | 端到端成功率 ≥ 90%；P95 ≤ 3s；trace 可回放 | 待开始 |
 | M5 | 3-5 天 | 评测闭环与业务场景 | 100 条黄金测试集；eval runner；badcase 迭代；人事/风控/财务/招采场景 | 评测脚本与报告 | Recall@10 ≥ 0.90；答案正确率 ≥ 0.85；token 成本降 ≥ 20% | 待开始 |
 | M6 | 2-3 天 | 交付与简历固化 | README/Demo/pytest；`resume_metrics.json`；简历措辞校准 | 完整文档、Demo、测试套件 | 新环境一键跑通；所有指标可复现 | 待开始 |
@@ -50,24 +52,30 @@
 | M0 | 权限与数据边界 | 无 `230027`、外部群不入库、基线测试通过 |
 | M1 | 数据底座完整 | 内部白名单消息可重建、幂等、主要消息类型有测试 |
 | M2 | 图谱与检索可用 | 索引可重建、检索可溯源、增量与源库一致（user 基线已完成；Recall 指标 M5 用黄金集补测） |
-| M3 | AI 摘要可用 | 摘要幂等、质量抽查通过、成本可控 |
+| M3 | AI 摘要可用 | 摘要幂等、质量抽查通过、成本可控（user 基线已完成） |
 | M4 | Agent 全链路可用 | 成功率 ≥ 90%、P95 ≤ 3s、trace 可回放 |
 | M5 | 评测闭环成立 | 黄金集指标达标、badcase 有闭环 |
 | M6 | 交付物完整 | 新环境跑通、简历指标可溯源 |
 
-## 五、M2 当前验收（2026-08-11，user 身份基线）
+## 五、M2/M3 当前验收（2026-08-12，user 身份基线）
 
 ```text
-index rebuild:      2 chats / 15 messages / 5 indexed / 2 chunks
-                    4 entities / 12 mentions / 10 edges
+index rebuild:      2 chats / 22 messages / 12 indexed / 3 chunks
+                    4 entities / 26 mentions / 17 edges
 index consistency:  consistent=true，索引覆盖与可索引源消息一致
 index incremental:  rebuild 后返回 no_changes，version_cursor 精确增量
 search "测试":      total=1，返回 chunk + message_id + create_time + sender
-graph stats:        4 entities / 12 mentions / 10 edges（person/group 两类）
+graph stats:        4 entities / 26 mentions / 17 edges（person/group 两类）
+summary rebuild:    run_id=1，chats_checked=2，chats_summarized=2，
+                    messages_covered=12，chunks_covered=3，summaries=2，errors=[]
+summary incremental: rebuild 后返回 no_changes，增量幂等
+summary consistency: consistent=true，摘要覆盖与索引消息一致
+summary status:     runs_total=1，summaries=2，token_estimate=491，fresh=true
 ```
 
-小结：M2 核心链路在真实库可重建、可校验、可检索、可追溯；
-`Recall@10` 等检索质量指标待 M5 黄金测试集补齐。
+小结：M2/M3 核心链路在真实库可重建、可校验、可检索、可追溯；
+rule 摘要为确定性验收基线，LLM 模式已预留 OpenAI 兼容端点；
+`Recall@10`、摘要质量人工抽查等指标待 M5 黄金测试集与业务闭环补齐。
 
 ## 六、风险与前置条件
 

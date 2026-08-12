@@ -60,3 +60,22 @@ class Settings:
         self.sync_timeout = int(os.environ.get("FEISHU_AGENT_SYNC_TIMEOUT", "180"))
         self.host = os.environ.get("FEISHU_AGENT_HOST", "127.0.0.1")
         self.port = int(os.environ.get("FEISHU_AGENT_PORT", "8080"))
+        # M3 summary budgets. Rule mode is the default baseline; LLM mode is
+        # an optional upgrade through any OpenAI-compatible /chat/completions
+        # endpoint.
+        self.summary_max_chars = int(
+            os.environ.get("FEISHU_AGENT_SUMMARY_MAX_CHARS", "4000")
+        )
+        self.summary_input_token_budget = int(
+            os.environ.get("FEISHU_AGENT_SUMMARY_INPUT_TOKEN_BUDGET", "6000")
+        )
+        self.summary_output_token_budget = int(
+            os.environ.get("FEISHU_AGENT_SUMMARY_OUTPUT_TOKEN_BUDGET", "1200")
+        )
+        self.summary_min_new_messages = int(
+            os.environ.get("FEISHU_AGENT_SUMMARY_MIN_NEW_MESSAGES", "1")
+        )
+        self.llm_api_url = os.environ.get("FEISHU_AGENT_LLM_API_URL", "").strip()
+        self.llm_api_key = os.environ.get("FEISHU_AGENT_LLM_API_KEY", "").strip()
+        self.llm_model = os.environ.get("FEISHU_AGENT_LLM_MODEL", "").strip()
+        self.llm_timeout = int(os.environ.get("FEISHU_AGENT_LLM_TIMEOUT", "60"))

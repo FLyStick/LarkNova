@@ -613,6 +613,41 @@ class Database:
                 ORDER BY last_sync_at DESC
                 """
             ).fetchall()
+            summary_runs_total = conn.execute(
+                "SELECT COUNT(*) FROM summary_runs"
+            ).fetchone()[0]
+            summary_totals = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(messages_covered), 0) AS messages_covered,
+                    COALESCE(SUM(chunks_covered), 0) AS chunks_covered,
+                    COALESCE(SUM(summaries_upserted), 0) AS summaries_upserted,
+                    COALESCE(SUM(summaries_skipped), 0) AS summaries_skipped
+                FROM summary_runs
+                """
+            ).fetchone()
+            summary_modes = {
+                str(row["mode"]): int(row["c"])
+                for row in conn.execute(
+                    """
+                    SELECT mode, COUNT(*) AS c
+                    FROM summary_runs
+                    GROUP BY mode
+                    ORDER BY mode
+                    """
+                )
+            }
+            summary_token_estimate = conn.execute(
+                """
+                SELECT COALESCE(
+                    SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0
+                )
+                FROM summaries
+                """
+            ).fetchone()[0]
+            last_summary_run = conn.execute(
+                "SELECT * FROM summary_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
             return {
                 "stats": stats,
                 "sync_runs_total": sync_runs_total,
@@ -620,6 +655,16 @@ class Database:
                 "last_sync_run": dict(last_run) if last_run else None,
                 "recent_sync_runs": self.recent_sync_runs(limit),
                 "sync_errors": [dict(row) for row in sync_errors],
+                "summary": {
+                    "runs_total": summary_runs_total,
+                    "totals": {
+                        key: int(summary_totals[key] or 0)
+                        for key in summary_totals.keys()
+                    },
+                    "modes": summary_modes,
+                    "token_estimate": int(summary_token_estimate or 0),
+                    "last_run": dict(last_summary_run) if last_summary_run else None,
+                },
             }
         finally:
             conn.close()
@@ -648,6 +693,12 @@ class Database:
             sync_runs = conn.execute(
                 "SELECT COUNT(*) AS c FROM sync_runs"
             ).fetchone()["c"]
+            summaries = conn.execute(
+                "SELECT COUNT(*) AS c FROM summaries"
+            ).fetchone()["c"]
+            summary_runs = conn.execute(
+                "SELECT COUNT(*) AS c FROM summary_runs"
+            ).fetchone()["c"]
             return {
                 "chats": chats,
                 "messages": messages,
@@ -656,6 +707,8 @@ class Database:
                 "normalize_errors": normalize_errors,
                 "versions": versions,
                 "sync_runs": sync_runs,
+                "summaries": summaries,
+                "summary_runs": summary_runs,
             }
         finally:
             conn.close()

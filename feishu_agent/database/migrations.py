@@ -224,6 +224,97 @@ def _apply_v4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v5(conn: sqlite3.Connection) -> None:
+    """M3: replace the placeholder summaries table and add run audit records."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(summaries)")}
+    required = {
+        "summary_json",
+        "structure",
+        "source_message_ids_json",
+        "source_chunk_ids_json",
+        "source_message_hash",
+        "mode",
+        "messages_covered",
+        "chunks_covered",
+        "updated_at",
+    }
+    if not required.issubset(columns):
+        conn.executescript(
+            """
+            DROP TABLE IF EXISTS summaries_new;
+
+            CREATE TABLE summaries_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                period_start TEXT,
+                period_end TEXT,
+                summary TEXT,
+                summary_json TEXT,
+                structure TEXT,
+                conclusion TEXT,
+                evidence TEXT,
+                todo TEXT,
+                key_people TEXT,
+                key_dates TEXT,
+                entities TEXT,
+                source_message_ids_json TEXT,
+                source_chunk_ids_json TEXT,
+                source_message_hash TEXT,
+                mode TEXT,
+                messages_covered INTEGER DEFAULT 0,
+                chunks_covered INTEGER DEFAULT 0,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                latency_ms INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'ok',
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(chat_id, period_start, period_end)
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO summaries_new (
+                id, chat_id, period_start, period_end, summary, created_at
+            )
+            SELECT id, chat_id, period_start, period_end, summary, created_at
+            FROM summaries
+            """
+        )
+        conn.execute("DROP TABLE summaries")
+        conn.execute("ALTER TABLE summaries_new RENAME TO summaries")
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_summaries_chat ON summaries(chat_id)"
+    )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS summary_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT,
+            finished_at TEXT,
+            duration_ms INTEGER,
+            mode TEXT,
+            scope TEXT,
+            chat_ids_json TEXT,
+            chats_checked INTEGER DEFAULT 0,
+            chats_summarized INTEGER DEFAULT 0,
+            messages_covered INTEGER DEFAULT 0,
+            chunks_covered INTEGER DEFAULT 0,
+            summaries_upserted INTEGER DEFAULT 0,
+            summaries_skipped INTEGER DEFAULT 0,
+            errors_json TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_summary_runs_finished
+        ON summary_runs(finished_at);
+        CREATE INDEX IF NOT EXISTS idx_summary_runs_mode
+        ON summary_runs(mode);
+        """
+    )
+
+
 def _backfill_normalized(conn: sqlite3.Connection) -> None:
     """Fill normalized columns and an initial version row for legacy messages."""
     rows = conn.execute(
@@ -310,5 +401,10 @@ MIGRATIONS = [
         4,
         "M2 topic index: chunks, FTS5 BM25, sparse TF-IDF, knowledge graph",
         _apply_v4,
+    ),
+    Migration(
+        5,
+        "M3 AI summary: structured summary tables",
+        _apply_v5,
     ),
 ]
