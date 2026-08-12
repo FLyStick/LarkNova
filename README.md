@@ -4,9 +4,9 @@ LarkNova 是在现有飞书消息同步 MVP 基础上迭代的**企业飞书知�
 
 开放平台接入 → 数据底座 → 知识图谱 → Agent/Harness 编排 → 可信评测 → 业务闭环。
 
-当前阶段：`M1 数据管道生产化`（进行中，user 身份基线）。
+当前阶段：`M2 主题组织与索引`（user 身份基线，核心已完成）。
 由于机器人暂无法加入测试群，项目按 `LARK_IDENTITY=user` 继续推进；
-bot 权限窗口已预留，代码侧不依赖 bot 身份完成数据管道，权限开通后补验。
+bot 权限窗口已预留，代码侧不依赖 bot 身份完成数据管道与索引，权限开通后补验。
 
 ## 目标架构
 
@@ -17,7 +17,7 @@ bot 权限窗口已预留，代码侧不依赖 bot 身份完成数据管道，�
 M1 数据底座：同步、清洗、编辑/撤回、迁移、失败隔离、数据边界
         │
         ▼
-M2 知识层：thread/话题切分、FTS5 + 向量索引、实体与关系知识图谱
+M2 知识层：thread/话题切分、FTS5 + 稀疏向量索引、实体与关系知识图谱
         │
         ▼
 M3 AI 摘要：结论 + 依据 + 待办、增量摘要、token 预算
@@ -34,16 +34,19 @@ M6 交付：文档、Demo、pytest、resume_metrics.json
 
 ## 当前现状
 
-- 本地库：4 个会话、482 条消息（其中 2 个历史外部群共 467 条，M0 后不计入业务指标），消息类型含 `text/post/interactive/system` 等。
+- 本地库：2 个内部群、15 条消息（其中可索引 5 条，其余为系统提示/低信号系统消息），消息类型含 `text/system` 等。
 - 用户身份同步已打通：全量 + 增量双游标、`message_id` 幂等、单群失败隔离，同步结果写入 `sync_runs`。
 - M1 已完成核心代码：富文本/交互/合并转发归一化、`content_hash`、编辑/撤回审计
-  `message_versions`、DB 迁移机制（v2/v3）、同步指标与 `normalize --rebuild` 重建命令。
+  `message_versions`、DB 迁移机制（v2/v3/v4）、同步指标与 `normalize --rebuild` 重建命令。
+- M2 已完成核心代码：thread/时间窗口 chunk、中文 bigram + FTS5 BM25、
+  稀疏 TF-IDF 与 RRF 融合检索、SQLite 规则知识图谱（entities/edges）、
+  重建/增量/一致性/搜索/图谱 CLI、同步后自动增量索引。
 - 机器人身份可枚举群聊，读取消息因缺少 `im:message:readonly` 返回 `230027`。
 - M0 已落地：`FEISHU_AGENT_ALLOWED_CHAT_IDS` 白名单、外部群默认排除、
   `python -m feishu_agent.main doctor` 可一键检测权限与数据边界，`boundary` 可审计/清理历史越界数据；
   M0 代码已完成，bot 实跑等待权限。
 
-## 第一阶段 M0/M1 验收清单
+## M0/M1/M2 验收清单
 
 ```text
 [x] 白名单外部群/非白名单群不入库
@@ -53,7 +56,12 @@ M6 交付：文档、Demo、pytest、resume_metrics.json
 [x] message_versions 编辑/撤回审计，重建幂等
 [x] sync_runs 指标与单群失败隔离
 [x] DB 迁移机制与旧库回填
-[x] 24 项单元测试全绿
+[x] 24 项单元测试全绿（M0/M1）
+[x] 34 项单元测试全绿（M2 加入 chunk/检索/图谱/增量/同步钩子）
+[x] M2 索引全量重建：2 群、15 条消息、5 条可索引、2 个 chunk
+[x] M2 consistency 通过：索引覆盖与可索引源消息一致
+[x] 中文/英文混合检索可溯源：返回 chunk、消息 ID、时间、发送者
+[x] graph stats/entity 可查询（4 实体 / 12 mentions / 10 边）
 [ ] 飞书后台开通 im:message:readonly（权限窗口）
 [ ] LARK_IDENTITY=bot 后 sync 无 230027（权限窗口）
 [ ] 入库会话集合与白名单一致，bot 实跑补验
@@ -64,7 +72,7 @@ M6 交付：文档、Demo、pytest、resume_metrics.json
 当前 `messages` 表按“一条消息一行”全量存储，作为事实源是合理的：`message_id`
 主键保证幂等，`raw_json` 保留原文，`content` 提供查询用文本。
 
-后续演进时会把派生数据从事实源拆出来，避免同表三层冗余：
+派生数据已按独立表拆分，避免同表三层冗余：
 
 ```text
 messages            事实源（单条全量，保留版本）
@@ -72,7 +80,7 @@ message_versions    编辑/撤回审计
 chunks              检索语料单元
 entities/edges      知识图谱
 summaries           结构化摘要
-FTS5 / 向量库        索引层，可重建
+FTS5 / 稀疏向量表   索引层，可重建
 ```
 
 ## 目录结构
@@ -82,14 +90,18 @@ feishu_agent/
   config.py                     环境变量与运行参数（身份、白名单、外部群策略）
   feishu/client.py              lark-cli 封装（会话 + 消息）
   database/db.py                SQLite 表结构与查询
-  database/migrations.py        幂等 DB 迁移（v2/v3）
+  database/migrations.py        幂等 DB 迁移（v2/v3/v4）
   normalize.py                  富文本归一化与内容摘要
   sync/runner.py                全量/增量同步 + 数据边界过滤 + 失败隔离
+  index/chunker.py              thread/时间窗口 chunk 生成
+  index/tokenizer.py            中文 bigram + ASCII token、FTS5 安全编码
+  index/repository.py           重建/增量/一致性/混合检索/图谱仓库
+  index/graph.py                规则实体抽取与回复关系图谱
   doctor.py                     bot 权限与数据边界体检
   boundary.py                   本地库边界审计与显式清理
   api/server.py                 标准库 HTTP API
-  main.py                       CLI 入口（sync/doctor/boundary/stats/metrics/normalize/serve）
-tests/             第一阶段自动化测试
+  main.py                       CLI（sync/doctor/boundary/stats/metrics/normalize/index/search/graph/serve）
+tests/             M0/M1/M2 自动化测试
 docs/ROADMAP.md    分阶段规划与验收
 docs/PLAN.md       详细任务拆解
 data/agent.db      本地 SQLite 数据库（不入库）
@@ -143,6 +155,21 @@ python -m feishu_agent.main metrics
 python -m feishu_agent.main normalize
 python -m feishu_agent.main normalize --rebuild
 
+# 全量重建主题 / 检索 / 图谱派生索引
+python -m feishu_agent.main index rebuild
+
+# 增量索引已随 sync 自动触发，也可以手动执行并查看状态/一致性
+python -m feishu_agent.main index incremental
+python -m feishu_agent.main index status
+python -m feishu_agent.main index consistency
+
+# 中文/英文混合检索（BM25 + 稀疏 TF-IDF + RRF）
+python -m feishu_agent.main search "测试" --chat-id oc_11404e974de3daf54122b117e907d177
+
+# 知识图谱统计与实体查询
+python -m feishu_agent.main graph stats
+python -m feishu_agent.main graph entity 蒋林
+
 # 启动 HTTP API，启动时同步一次，之后每 60 秒增量同步
 python -m feishu_agent.main serve --port 8080 `
   --interval 60 --sync-on-start --identity user
@@ -175,12 +202,20 @@ POST /api/sync   {"full": false}
 GET  /api/metrics?limit=10
 GET  /api/sync-runs?limit=20
 GET  /api/message-versions?message_id=om_xxx&limit=100
+GET  /api/search?q=测试&chat_id=oc_xxx&limit=10
+GET  /api/graph/entities?type=person&q=蒋林
+GET  /api/graph/entity?q=蒋林
+GET  /api/index/status
+POST /api/index/rebuild     {"allow_external": false, "chat_ids": []}
+POST /api/index/incremental {"chat_ids": []}
 ```
 
 ## 后续阶段
 
-M2 主题组织与索引：thread/话题切分、chunk、FTS5 + 向量、知识图谱、增量索引。
- M4 Agent + Harness：LangGraph、MCP 工具、降级与 trace。
+M2 主题组织与索引：thread/时间窗口 chunk、FTS5 + 稀疏 TF-IDF 混合检索、
+实体关系知识图谱与增量索引（user 基线核心已完成）。
+M3 AI 摘要与上下文：结论 + 依据 + 待办结构化摘要、增量补充、token 预算。
+M4 Agent + Harness：LangGraph、MCP 工具、降级与 trace。
 M5 评测闭环：黄金测试集、检索/问答指标、Badcase 迭代。
 M6 交付与简历固化：README、Demo、可复现指标。
 

@@ -6,6 +6,7 @@ from typing import Any
 
 from feishu_agent.database.db import Database, iso_now
 from feishu_agent.feishu.client import FeishuClient
+from feishu_agent.index.repository import IndexRepository
 
 
 def boundary_reason(
@@ -69,6 +70,7 @@ class SyncRunner:
                 "messages_deleted": 0,
                 "messages_restored": 0,
                 "errors": [],
+                "index": None,
                 "boundary": {
                     "allow_external": self.allow_external,
                     "whitelist": sorted(self.allowed_chat_ids) if self.allowed_chat_ids is not None else [],
@@ -127,8 +129,19 @@ class SyncRunner:
                 (datetime.now().astimezone() - started).total_seconds() * 1000
             )
             result["chats_failed"] = len(result["errors"])
+            result["index"] = self._incremental_index(chat_ids)
             self.db.record_sync_run(result)
             return result
+
+    def _incremental_index(self, chat_ids: list[str] | None) -> dict[str, Any]:
+        """Refresh the derived index after sync without blocking sync failures."""
+        try:
+            return IndexRepository(self.db).incremental(
+                chat_ids=chat_ids,
+                allowed_chat_ids=self.allowed_chat_ids,
+            )
+        except Exception as exc:
+            return {"mode": "incremental", "built": False, "error": str(exc)}
 
     def sync_chat(self, chat_id: str, full: bool = False) -> dict[str, Any]:
         started = datetime.now().astimezone()

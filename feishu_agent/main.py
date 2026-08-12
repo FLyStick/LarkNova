@@ -11,6 +11,7 @@ from feishu_agent.config import Settings
 from feishu_agent.database.db import Database
 from feishu_agent.doctor import format_doctor, run_doctor
 from feishu_agent.feishu.client import FeishuClient
+from feishu_agent.index.repository import IndexRepository
 from feishu_agent.sync.runner import SyncRunner
 from feishu_agent.boundary import audit_local_db, prune_local_db
 
@@ -119,6 +120,67 @@ def cmd_normalize(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_index(args: argparse.Namespace) -> int:
+    settings = Settings()
+    db = Database(settings.db_path)
+    db.init()
+    repo = IndexRepository(db)
+    command = args.index_command
+    if command == "rebuild":
+        result = repo.rebuild(
+            allow_external=args.allow_external,
+            chat_ids=args.chat_id,
+            allowed_chat_ids=settings.allowed_chat_ids,
+        )
+    elif command == "incremental":
+        result = repo.incremental(
+            chat_ids=args.chat_id,
+            allowed_chat_ids=settings.allowed_chat_ids,
+        )
+    elif command == "status":
+        result = repo.status()
+    elif command == "consistency":
+        result = repo.consistency(
+            allow_external=args.allow_external,
+            chat_ids=args.chat_id,
+            allowed_chat_ids=settings.allowed_chat_ids,
+        )
+    else:
+        result = {"error": f"unknown index command {command}"}
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if result.get("errors"):
+        return 1
+    if command == "consistency" and not result.get("consistent"):
+        return 2
+    return 0
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    settings = Settings()
+    db = Database(settings.db_path)
+    db.init()
+    result = IndexRepository(db).search(
+        args.query,
+        chat_ids=args.chat_id,
+        limit=args.limit,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_graph(args: argparse.Namespace) -> int:
+    settings = Settings()
+    db = Database(settings.db_path)
+    db.init()
+    repo = IndexRepository(db)
+    if args.graph_command == "stats":
+        result = repo.entity_stats()
+    else:
+        result = repo.query_graph(args.entity)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     settings = Settings()
     runner = build_runner(settings, args.identity)
@@ -194,6 +256,40 @@ def build_parser() -> argparse.ArgumentParser:
     normalize = sub.add_parser("normalize", help="inspect or rebuild normalized message text")
     normalize.add_argument("--rebuild", action="store_true", help="recompute normalized text/hash for all messages")
     normalize.set_defaults(func=cmd_normalize)
+
+    index = sub.add_parser("index", help="topic index rebuild/incremental/status/consistency")
+    index_sub = index.add_subparsers(dest="index_command", required=True)
+
+    index_rebuild = index_sub.add_parser("rebuild", help="rebuild chunks, FTS5, vectors and graph")
+    index_rebuild.add_argument("--allow-external", action="store_true", help="include external chats")
+    index_rebuild.add_argument("--chat-id", action="append", help="only index this chat_id; repeatable")
+    index_rebuild.set_defaults(func=cmd_index)
+
+    index_incremental = index_sub.add_parser("incremental", help="index chats changed since last run")
+    index_incremental.add_argument("--chat-id", action="append", help="only check this chat_id; repeatable")
+    index_incremental.set_defaults(func=cmd_index)
+
+    index_status = index_sub.add_parser("status", help="show index status and counts")
+    index_status.set_defaults(func=cmd_index)
+
+    index_consistency = index_sub.add_parser("consistency", help="verify index matches source messages")
+    index_consistency.add_argument("--allow-external", action="store_true", help="include external chats")
+    index_consistency.add_argument("--chat-id", action="append", help="only check this chat_id; repeatable")
+    index_consistency.set_defaults(func=cmd_index)
+
+    search = sub.add_parser("search", help="hybrid BM25 + sparse TF-IDF search")
+    search.add_argument("query", help="query text")
+    search.add_argument("--chat-id", action="append", help="limit to this chat_id; repeatable")
+    search.add_argument("--limit", type=int, default=10, help="max results")
+    search.set_defaults(func=cmd_search)
+
+    graph = sub.add_parser("graph", help="knowledge graph stats and entity queries")
+    graph_sub = graph.add_subparsers(dest="graph_command", required=True)
+    graph_stats = graph_sub.add_parser("stats", help="entity/edge aggregate counts")
+    graph_stats.set_defaults(func=cmd_graph)
+    graph_entity = graph_sub.add_parser("entity", help="query an entity by keyword or entity_id")
+    graph_entity.add_argument("entity", help="entity value keyword or 64-char entity_id")
+    graph_entity.set_defaults(func=cmd_graph)
 
     serve = sub.add_parser("serve", help="start HTTP API with optional periodic sync")
     serve.add_argument("--host", default=None)

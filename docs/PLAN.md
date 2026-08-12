@@ -17,17 +17,19 @@
 - 数据表：`chats`、`messages`、`sync_state`、`summaries`（预留）。
 - 同步能力：全量/增量同步、消息时间游标、upsert 兼容编辑与撤回、同步互斥锁。
 - API：`/health`、`/api/chats`、`/api/messages`、`/api/stats`、`/api/sync`。
-- 真实数据：4 个会话、482 条消息（含 2 个历史外部群 467 条，业务口径以内部白名单群为准），含 `post/text/interactive/system` 等类型。
+- 真实数据：2 个内部群、15 条消息（其中 5 条可索引），含 `text/system` 等类型。
 - M1 核心代码：`normalize` 归一化、`message_versions` 审计、`sync_runs` 指标、
-  单群失败隔离、DB 迁移（v2/v3）与 `normalize --rebuild` 已实现并通过 24 项测试。
+  单群失败隔离、DB 迁移（v2/v3）与 `normalize --rebuild` 已实现。
+- M2 核心代码：chunk、FTS5 BM25、稀疏 TF-IDF + RRF、规则知识图谱、
+  重建/增量/一致性/搜索/图谱命令与 API、同步后自动增量索引，34 项测试通过。
 
 **主要缺口**
 
 - 机器人读取消息权限 `im:message:readonly` 未开通，当前按 `LARK_IDENTITY=user` 运行；
   bot 权限窗口已预留，机器人入群后完成复验。
 - 本地库存在 2 个历史外部群样本，M0 已提供 `boundary` 审计与显式确认清理命令。
-- 富文本已归一化并保留原始 JSON；检索/摘要所需的派生索引与 AI 能力尚未建立。
-- 尚未建立索引、AI 摘要、Agent 工作流、评测集和部署能力。
+- 富文本已归一化并保留原始 JSON；M2 派生索引已建立，M3 摘要及后续 AI 能力尚未开始。
+- 尚未建立 AI 摘要、Agent 工作流、评测集和部署能力。
 
 ## 3. 阶段总览
 
@@ -35,7 +37,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | M0 | 权限与数据边界 | 开通机器人读消息权限；切换 bot 身份；圈定内部测试群；过滤外部群；审计/清理历史越界数据 | 权限清单、测试群配置、同步脚本、boundary 命令 | bot 身份拉取成功；无 `230027`；仅内部群入库；历史外部群可审计清理 | M0 | 0.5-1 天 |
 | M1 | 数据管道生产化 | 富文本归一化；消息更新/撤回处理；索引与约束优化；错误隔离；迁移机制 | 消息解析器、清洗规则、同步指标、DB 迁移 | 边界清理后的内部群消息全量重建一致；重复执行幂等；主要消息类型可解析 | M0 | 3-5 天 |
-| M2 | 主题组织与索引 | 会话/话题切分；thread 聚合；chunk 生成；关键词 + 向量索引；增量索引 | 语料切分模块、索引仓库、重建/增量命令 | 全量可重建；增量与源库一致；检索接口可上线 | M0 | 3-5 天 |
+| M2 | 主题组织与索引 | 会话/话题切分；thread 聚合；chunk 生成；关键词 + 稀疏向量索引；增量索引 | 语料切分模块、索引仓库、重建/增量命令 | 全量可重建；增量与源库一致；检索接口可上线 | M0 | 3-5 天 |
 | M3 | AI 摘要与上下文 | LLM 时段/话题摘要；结论 + 依据 + 待办结构化输出；增量补充摘要；token 预算控制 | 摘要 Worker、`summaries` 写入、摘要查询 API | 摘要可生成；重复执行幂等；质量抽查通过；成本可控 | M1 | 3-5 天 |
 | M4 | Agent 应用层 | FastAPI + LangGraph 编排；意图识别；工具调用；MCP/Skill 工具；引用溯源；拒答；SSE | Agent API、工具注册表、链路测试 | 端到端问答通过；回答可溯源；可拒答；P50/P95 达标 | M1 | 5-7 天 |
 | M5 | 评测与业务闭环 | 人事/风控/财务/招采场景沉淀；黄金测试集；检索与问答评测；Badcase 闭环；参数调优 | 评测脚本、测试集、评测报告 | Recall/首条命中率提升；测试集 >= 30 条；Badcase 闭环率达标 | M1 | 3-5 天 |
@@ -98,11 +100,14 @@ M1 当前进度（2026-08-11，user 身份基线）：
 
 ### M2 主题组织与索引
 
+当前状态：已完成 user 身份基线（2026-08-11），bot 权限开通后复验。
+
 任务：
 
 1. 将消息按 thread、会话窗口、话题边界聚合成“语料单元”。
 2. 实现 chunk 策略：按时间窗口、发言轮次、语义段落切分并生成 chunk 记录。
-3. 建立关键词索引（SQLite FTS 或独立搜索组件）与向量索引（优先 ChromaDB，预留 Milvus 适配器）。
+3. 建立关键词索引（SQLite FTS5 BM25）与稀疏 TF-IDF 向量，RRF 融合；
+   dense vector / ChromaDB / Milvus 作为可选升级。
 4. 支持全量重建索引与增量索引，保证索引与 `messages` 数据一致。
 5. 输出检索 API：输入问题与群范围，返回含时间、消息 ID、发送者的候选结果。
 
@@ -112,6 +117,24 @@ M1 当前进度（2026-08-11，user 身份基线）：
 - 新消息同步后触发增量索引，检索立即可见。
 - 检索返回结果带可追溯字段（`message_id/chat_id/create_time/sender`）。
 - 索引重建与检索接口通过自动化测试。
+
+M2 当前进度（2026-08-11，user 身份基线）：
+
+- [x] `index/chunker.py`：thread + 时间窗口 + 消息数/字符上限生成 chunk。
+- [x] `index/tokenizer.py`：中文 bigram + ASCII token，FTS5 安全编码。
+- [x] `index/repository.py`：rebuild/incremental/consistency/search/graph，
+  FTS5 BM25 + 稀疏 TF-IDF + RRF，`index_runs.version_cursor` 精确增量。
+- [x] `index/graph.py`：person/group/department/date/identifier/url/amount
+  规则实体、共现边与 replied_to 边。
+- [x] DB 迁移 v4：chunks/chunk_messages/chunk_vectors/entities/entity_mentions/
+  edges/chunks_fts/index_runs。
+- [x] `sync/runner.py` 同步后自动增量索引，索引失败不影响同步结果。
+- [x] 新增 API：`/api/search`、`/api/graph/entities`、`/api/graph/entity`、
+  `/api/index/status`、`/api/index/rebuild`、`/api/index/incremental`。
+- [x] 真实库验收：rebuild 为 2 群 / 15 消息 / 5 可索引 / 2 chunks；
+  consistency=true；中文检索可溯源；graph stats 为 4 实体 / 12 mentions / 10 边。
+- [x] 34 项单元测试全绿。
+- [ ] bot 权限开通后，用 bot 身份同步并复跑 index consistency/search。
 
 ### M3 AI 摘要与上下文
 
