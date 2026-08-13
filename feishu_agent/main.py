@@ -7,6 +7,8 @@ import threading
 import time
 
 from feishu_agent.api.server import create_server
+from feishu_agent.agent import AgentHarness
+from feishu_agent.agent.repository import AgentRepository
 from feishu_agent.config import Settings
 from feishu_agent.database.db import Database
 from feishu_agent.doctor import format_doctor, run_doctor
@@ -45,6 +47,17 @@ def make_summary_factory(settings: Settings):
         db = Database(settings.db_path)
         db.init()
         return SummaryRepository(db, settings)
+    return factory
+
+
+def make_agent_factory(settings: Settings):
+    """Return a fresh AgentHarness over the configured database."""
+    def factory() -> AgentHarness:
+        return AgentHarness(
+            lambda: Database(settings.db_path),
+            settings=settings,
+        )
+
     return factory
 
 
@@ -110,6 +123,52 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     db = Database(settings.db_path)
     db.init()
     print(json.dumps(db.metrics(limit=args.limit), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_agent(args: argparse.Namespace) -> int:
+    settings = Settings()
+    db = Database(settings.db_path)
+    db.init()
+    command = args.agent_command
+    if command == "ask":
+        trace = AgentHarness(
+            lambda: Database(settings.db_path),
+            settings=settings,
+        ).ask(
+            args.question,
+            mode=args.mode,
+            chat_ids=args.chat_id,
+        )
+        print(json.dumps(trace.to_dict(), ensure_ascii=False, indent=2))
+        return 0
+    repo = AgentRepository(db)
+    if command == "runs":
+        runs = repo.list_runs(limit=args.limit)
+        print(
+            json.dumps(
+                {"count": len(runs), "runs": runs},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    elif command == "trace":
+        run = repo.get(args.run_id)
+        if run is None:
+            print(
+                json.dumps(
+                    {"ok": False, "error": "run_not_found"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+        print(json.dumps({"ok": True, "run": run}, ensure_ascii=False, indent=2))
+    elif command == "stats":
+        print(json.dumps(repo.stats(), ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps({"error": f"unknown agent command {command}"}))
+        return 1
     return 0
 
 
@@ -257,6 +316,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
         runner,
         lambda: Database(settings.db_path),
         summary_factory=make_summary_factory(settings),
+        agent_factory=make_agent_factory(settings),
+        api_token=settings.api_token,
+        rate_limit_per_min=settings.api_rate_limit_per_min,
     )
 
     if interval and interval > 0:
@@ -314,6 +376,35 @@ def build_parser() -> argparse.ArgumentParser:
     metrics = sub.add_parser("metrics", help="show sync metrics and recent runs")
     metrics.add_argument("--limit", type=int, default=10, help="recent sync runs")
     metrics.set_defaults(func=cmd_metrics)
+
+    agent = sub.add_parser("agent", help="M4 agent ask/runs/trace/stats")
+    agent_sub = agent.add_subparsers(dest="agent_command", required=True)
+
+    agent_ask = agent_sub.add_parser("ask", help="answer one question")
+    agent_ask.add_argument("question", help="question text")
+    agent_ask.add_argument(
+        "--mode",
+        choices=["auto", "rule", "llm"],
+        default="auto",
+        help="auto/rule/llm; auto falls back to rule",
+    )
+    agent_ask.add_argument(
+        "--chat-id",
+        action="append",
+        help="limit to this chat_id; repeatable",
+    )
+    agent_ask.set_defaults(func=cmd_agent)
+
+    agent_runs = agent_sub.add_parser("runs", help="list recent agent runs")
+    agent_runs.add_argument("--limit", type=int, default=20)
+    agent_runs.set_defaults(func=cmd_agent)
+
+    agent_trace = agent_sub.add_parser("trace", help="show one trace with steps")
+    agent_trace.add_argument("run_id", help="trace_id or numeric run id")
+    agent_trace.set_defaults(func=cmd_agent)
+
+    agent_stats = agent_sub.add_parser("stats", help="show agent run statistics")
+    agent_stats.set_defaults(func=cmd_agent)
 
     normalize = sub.add_parser("normalize", help="inspect or rebuild normalized message text")
     normalize.add_argument("--rebuild", action="store_true", help="recompute normalized text/hash for all messages")

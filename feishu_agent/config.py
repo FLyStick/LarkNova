@@ -31,6 +31,15 @@ def _parse_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _split_list(value: str) -> list[str]:
+    """Split comma/semicolon-separated env values, dropping empty entries."""
+    return [
+        part.strip()
+        for part in value.replace(";", ",").split(",")
+        if part.strip()
+    ]
+
+
 class Settings:
     """Runtime settings loaded from environment variables."""
 
@@ -79,3 +88,27 @@ class Settings:
         self.llm_api_key = os.environ.get("FEISHU_AGENT_LLM_API_KEY", "").strip()
         self.llm_model = os.environ.get("FEISHU_AGENT_LLM_MODEL", "").strip()
         self.llm_timeout = int(os.environ.get("FEISHU_AGENT_LLM_TIMEOUT", "60"))
+        # M4 agent harness budgets and safety controls. LLM mode is optional;
+        # rule mode remains the deterministic default.
+        self.agent_max_question_chars = int(
+            os.environ.get("FEISHU_AGENT_MAX_QUESTION_CHARS", "2000")
+        )
+        self.agent_max_answer_chars = int(
+            os.environ.get("FEISHU_AGENT_MAX_ANSWER_CHARS", "2000")
+        )
+        self.agent_max_evidence_items = int(
+            os.environ.get("FEISHU_AGENT_MAX_EVIDENCE_ITEMS", "10")
+        )
+        self.agent_max_steps = int(
+            os.environ.get("FEISHU_AGENT_MAX_STEPS", "5")
+        )
+        self.agent_sensitive_words = _split_list(
+            os.environ.get(
+                "FEISHU_AGENT_SENSITIVE_WORDS",
+                "password,secret,api_key,access_token,密钥,密码,身份证号,银行卡号",
+            )
+        )
+        self.api_token = os.environ.get("FEISHU_AGENT_API_TOKEN", "").strip()
+        self.api_rate_limit_per_min = int(
+            os.environ.get("FEISHU_AGENT_RATE_LIMIT_PER_MIN", "0")
+        )

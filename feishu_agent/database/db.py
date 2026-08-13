@@ -587,6 +587,8 @@ class Database:
     def metrics(self, limit: int = 10) -> dict[str, Any]:
         conn = self._conn()
         try:
+            from feishu_agent.agent.repository import AgentRepository
+
             stats = self.stats()
             sync_runs_total = conn.execute(
                 "SELECT COUNT(*) AS c FROM sync_runs"
@@ -665,6 +667,7 @@ class Database:
                     "token_estimate": int(summary_token_estimate or 0),
                     "last_run": dict(last_summary_run) if last_summary_run else None,
                 },
+                "agent": AgentRepository(self).stats(),
             }
         finally:
             conn.close()
@@ -699,6 +702,12 @@ class Database:
             summary_runs = conn.execute(
                 "SELECT COUNT(*) AS c FROM summary_runs"
             ).fetchone()["c"]
+            agent_runs = conn.execute(
+                "SELECT COUNT(*) AS c FROM agent_runs"
+            ).fetchone()["c"]
+            agent_traces = conn.execute(
+                "SELECT COUNT(*) AS c FROM agent_traces"
+            ).fetchone()["c"]
             return {
                 "chats": chats,
                 "messages": messages,
@@ -709,6 +718,8 @@ class Database:
                 "sync_runs": sync_runs,
                 "summaries": summaries,
                 "summary_runs": summary_runs,
+                "agent_runs": agent_runs,
+                "agent_traces": agent_traces,
             }
         finally:
             conn.close()

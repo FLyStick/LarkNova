@@ -9,7 +9,8 @@
 > M3 AI 摘要与上下文已完成 user 基线，真实库验收为
 > 2 群 / 22 条消息 / 12 条可索引 / 3 个 chunk / 4 实体 / 26 mentions / 17 边 /
 > 2 条结构化摘要 / token 估算 491；
-> 39 项单元测试通过；bot 权限开通后补验。
+> M4 Agent + Harness 已完成 user 基线（rule 问答、trace 回放、鉴权限流）；
+> 48 项单元测试通过；bot 权限开通后补验。
 
 ## 一、规划原则
 
@@ -27,11 +28,11 @@
 | 存储 | SQLite 事实源 + 版本/指标表 | SQLite + FTS5 + 稀疏向量表（已落地）；ChromaDB/Milvus 可选升级 |
 | 图谱 | 无 | SQLite entities/edges + 规则抽取（已落地）；NetworkX/Neo4j 可选升级 |
 | 检索 | LIKE 关键词 | BM25 + 稀疏 TF-IDF + RRF（已落地）；Query 改写 + Rerank 可选 |
-| Agent 编排 | 无 | LangGraph（Planner + Harness + 校验器） |
-| Agent 工具 | 无 | FastMCP 封装飞书/Bitable/检索/图谱工具 |
+| Agent 编排 | 无 | 标准库自研 Harness（Planner + 工具注册表 + 校验器）（M4 已落地）；LangGraph 可选 |
+| Agent 工具 | 无 | 自研函数工具注册表 + OpenAI 兼容函数调用（M4 已落地）；FastMCP 可选 |
 | 模型 | 无 | LLM / Embedding 均采用可配置 API（OpenAI 兼容端点） |
 | 评测 | 无 | 自研 eval runner + LLM-as-judge + JSONL trace |
-| 测试 | unittest（24 项） | unittest（39 项）；pytest + 黄金测试集 + 故障注入（M5 起） |
+| 测试 | unittest（24 项） | unittest（48 项）；pytest + 黄金测试集 + 故障注入（M5 起） |
 
 ## 三、分阶段实施与验收
 
@@ -41,7 +42,7 @@
 | M1 | 3-5 天 | 数据管道生产化 | 富文本归一化；编辑/撤回一致性；同步指标；单群失败隔离；DB 迁移 | 消息解析器、`message_versions`、迁移工具、stats 扩展 | user 基线重建一致且幂等；主要消息类型有测试；bot 权限开通后复验 | 已完成（user 基线） |
 | M2 | 3-5 天 | 主题组织与索引 | thread/时间窗口切分；chunk 生成；FTS5 + 稀疏向量；知识图谱 entities/edges；增量索引 | chunks/entities/edges、检索 API | 索引可重建、可溯源、与源库一致；增量只重建变更群；测试全绿 | 已完成（user 基线） |
 | M3 | 3-5 天 | AI 摘要与上下文 | 结论 + 依据 + 待办结构化摘要；增量补充摘要；token 预算 | summaries worker、摘要 API | 摘要幂等；质量抽查 ≥ 85%；成本可控 | 已完成（user 基线） |
-| M4 | 5-7 天 | Agent + Harness | LangGraph 编排；MCP/FastMCP 工具；超时、重试、降级、敏感词；trace 与 SSE | `/api/agent/ask`、trace 回放 | 端到端成功率 ≥ 90%；P95 ≤ 3s；trace 可回放 | 待开始 |
+| M4 | 5-7 天 | Agent + Harness | 标准库自研 Harness；工具注册表；rule/llm/auto 降级、敏感词、引用校验；trace 持久化；API 鉴权限流 | `/api/agent/ask`、`agent_runs/agent_traces`、trace 回放 | 端到端成功率 ≥ 90%；P95 ≤ 3s；trace 可回放 | 已完成（user 基线） |
 | M5 | 3-5 天 | 评测闭环与业务场景 | 100 条黄金测试集；eval runner；badcase 迭代；人事/风控/财务/招采场景 | 评测脚本与报告 | Recall@10 ≥ 0.90；答案正确率 ≥ 0.85；token 成本降 ≥ 20% | 待开始 |
 | M6 | 2-3 天 | 交付与简历固化 | README/Demo/pytest；`resume_metrics.json`；简历措辞校准 | 完整文档、Demo、测试套件 | 新环境一键跑通；所有指标可复现 | 待开始 |
 
@@ -53,11 +54,11 @@
 | M1 | 数据底座完整 | 内部白名单消息可重建、幂等、主要消息类型有测试 |
 | M2 | 图谱与检索可用 | 索引可重建、检索可溯源、增量与源库一致（user 基线已完成；Recall 指标 M5 用黄金集补测） |
 | M3 | AI 摘要可用 | 摘要幂等、质量抽查通过、成本可控（user 基线已完成） |
-| M4 | Agent 全链路可用 | 成功率 ≥ 90%、P95 ≤ 3s、trace 可回放 |
+| M4 | Agent 全链路可用 | 成功率 ≥ 90%、P95 ≤ 3s、trace 可回放（user 基线已完成，真实库可回放） |
 | M5 | 评测闭环成立 | 黄金集指标达标、badcase 有闭环 |
 | M6 | 交付物完整 | 新环境跑通、简历指标可溯源 |
 
-## 五、M2/M3 当前验收（2026-08-12，user 身份基线）
+## 五、M2/M3/M4 当前验收（2026-08-12，user 身份基线）
 
 ```text
 index rebuild:      2 chats / 22 messages / 12 indexed / 3 chunks
@@ -71,10 +72,18 @@ summary rebuild:    run_id=1，chats_checked=2，chats_summarized=2，
 summary incremental: rebuild 后返回 no_changes，增量幂等
 summary consistency: consistent=true，摘要覆盖与索引消息一致
 summary status:     runs_total=1，summaries=2，token_estimate=491，fresh=true
+
+agent ask:          mode=rule，status=ok，7 条消息级引用，170 token，35ms
+agent runs:         count=1，run 持久化于 agent_runs
+agent trace:        1 条 tool(search) 步骤，输入/输出/耗时/错误可回放
+agent stats:        runs_total=1，citations=7，latency avg=35ms
+agent API:          /api/agent/ask、/api/agent/runs、/api/agent/stats 通过，
+                    Bearer/X-API-Token 鉴权与限流有测试
 ```
 
-小结：M2/M3 核心链路在真实库可重建、可校验、可检索、可追溯；
+小结：M2/M3/M4 核心链路在真实库可重建、可校验、可检索、可追溯；
 rule 摘要为确定性验收基线，LLM 模式已预留 OpenAI 兼容端点；
+rule 问答与 trace 为 M4 确定性验收基线，LLM 规划失败自动降级；
 `Recall@10`、摘要质量人工抽查等指标待 M5 黄金测试集与业务闭环补齐。
 
 ## 六、风险与前置条件

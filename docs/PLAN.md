@@ -19,11 +19,14 @@
 - API：`/health`、`/api/chats`、`/api/messages`、`/api/stats`、`/api/sync`。
 - 真实数据：2 个内部群、22 条消息（其中 12 条可索引），含 `text/system` 等类型。
 - M1 核心代码：`normalize` 归一化、`message_versions` 审计、`sync_runs` 指标、
-  单群失败隔离、DB 迁移（v2/v3）与 `normalize --rebuild` 已实现。
+  单群失败隔离、DB 迁移（v2/v3，当前已扩展至 v6）与 `normalize --rebuild` 已实现。
 - M2 核心代码：chunk、FTS5 BM25、稀疏 TF-IDF + RRF、规则知识图谱、
   重建/增量/一致性/搜索/图谱命令与 API、同步后自动增量索引。
 - M3 核心代码：rule 确定性摘要 + LLM 可选模式、增量/一致性/状态 CLI 与 API、
   同步后自动增量摘要，39 项测试通过。
+- M4 核心代码：自研标准库 AgentHarness、工具注册表、rule/llm/auto 三模式、
+  无依据拒答、LLM 引用校验、敏感词/预算护栏、agent_runs/agent_traces 持久化、
+  agent CLI 与 /api/agent/* 鉴权限流，48 项测试通过。
 
 **主要缺口**
 
@@ -31,7 +34,7 @@
   bot 权限窗口已预留，机器人入群后完成复验。
 - 本地库存在 2 个历史外部群样本，M0 已提供 `boundary` 审计与显式确认清理命令。
 - 富文本已归一化并保留原始 JSON；M2 派生索引、M3 结构化摘要已建立，
-  M4 Agent 与后续 AI 能力尚未开始。
+  M4 Agent Harness 已完成核心链路；M5 评测集与业务闭环尚未开始。
 - 尚未建立 Agent 工作流、评测集和部署能力。
 
 ## 3. 阶段总览
@@ -42,7 +45,7 @@
 | M1 | 数据管道生产化 | 富文本归一化；消息更新/撤回处理；索引与约束优化；错误隔离；迁移机制 | 消息解析器、清洗规则、同步指标、DB 迁移 | 边界清理后的内部群消息全量重建一致；重复执行幂等；主要消息类型可解析 | M0 | 3-5 天 |
 | M2 | 主题组织与索引 | 会话/话题切分；thread 聚合；chunk 生成；关键词 + 稀疏向量索引；增量索引 | 语料切分模块、索引仓库、重建/增量命令 | 全量可重建；增量与源库一致；检索接口可上线 | M0 | 3-5 天 |
 | M3 | AI 摘要与上下文 | LLM 时段/话题摘要；结论 + 依据 + 待办结构化输出；增量补充摘要；token 预算控制 | 摘要 Worker、`summaries` 写入、摘要查询 API | 摘要可生成；重复执行幂等；质量抽查通过；成本可控 | M1 | 3-5 天 |
-| M4 | Agent 应用层 | FastAPI + LangGraph 编排；意图识别；工具调用；MCP/Skill 工具；引用溯源；拒答；SSE | Agent API、工具注册表、链路测试 | 端到端问答通过；回答可溯源；可拒答；P50/P95 达标 | M1 | 5-7 天 |
+| M4 | Agent 应用层 | 自研标准库 Harness；工具注册表；rule/llm/auto 降级；引用溯源、拒答、敏感词；trace 持久化；API 鉴权限流 | Agent API、工具注册表、trace 回放 | 端到端问答通过；回答可溯源；可拒答；trace 可回放 | M1 | 5-7 天 |
 | M5 | 评测与业务闭环 | 人事/风控/财务/招采场景沉淀；黄金测试集；检索与问答评测；Badcase 闭环；参数调优 | 评测脚本、测试集、评测报告 | Recall/首条命中率提升；测试集 >= 30 条；Badcase 闭环率达标 | M1 | 3-5 天 |
 | M6 | 部署与最终验收 | Docker/环境变量/权限安全；运行手册；架构文档；全量回归 | 部署包、README、验收报告 | 新环境可一键启动；全部测试通过；业务演示通过 | M2 | 2-3 天 |
 
@@ -97,7 +100,7 @@ M1 当前进度（2026-08-11，user 身份基线）：
 - [x] `message_versions`：created/content_updated/recalled/restored/metadata_updated 审计。
 - [x] `sync_runs`：每次同步的计数、耗时、失败群与错误落库；`metrics` 可查询。
 - [x] 单群失败隔离，失败群不阻塞其他群；`sync_state` 记录错误。
-- [x] DB 迁移 v2/v3，旧消息自动回填归一化字段与 initial 版本。
+- [x] DB 迁移 v2/v3，旧消息自动回填归一化字段与 initial 版本（后续 v4/v5/v6 已扩展）。
 - [x] 新增 API：`/api/metrics`、`/api/sync-runs`、`/api/message-versions`。
 - [ ] bot 权限开通且机器人加入白名单群后，用 `--identity bot` 复验同步。
 
@@ -136,7 +139,7 @@ M2 当前进度（2026-08-12，user 身份基线）：
   `/api/index/status`、`/api/index/rebuild`、`/api/index/incremental`。
 - [x] 真实库验收：rebuild 为 2 群 / 22 消息 / 12 可索引 / 3 chunks；
   consistency=true；中文检索可溯源；graph stats 为 4 实体 / 26 mentions / 17 边。
-- [x] M2 阶段 34 项单元测试全绿；当前全量 39 项全绿。
+- [x] M2 阶段 34 项单元测试全绿。
 - [ ] bot 权限开通后，用 bot 身份同步并复跑 index consistency/search。
 
 ### M3 AI 摘要与上下文
@@ -177,26 +180,42 @@ M3 当前进度（2026-08-12，user 身份基线）：
   生成 2 条摘要；incremental 返回 no_changes；
   consistency=true；status 为 runs=1、summaries=2、token_estimate=491、fresh=true；
   metrics 同步显示。
-- [x] 39 项单元测试全绿。
+- [x] M3 阶段累计 39 项单元测试全绿；当前全量 48 项全绿。
 - [ ] bot 权限开通后，用 bot 身份同步并复跑 summary consistency/status。
 
 ### M4 Agent 应用层
 
 任务：
 
-1. 引入 FastAPI + LangGraph，保留现有同步命令与 API 兼容。
-2. 编排链路：意图识别 → 工具调用（消息查询、检索、摘要查询）→ 生成 → 校验。
-3. 将本地能力封装为 MCP/Skill 风格工具，工具输入输出有 schema 与错误处理。
+1. 基于 Python 标准库实现 AgentHarness，保留现有同步命令与 API 兼容，不新增第三方依赖。
+2. 编排链路：问题护栏 → 计划/规则决策 → 工具调用（检索）→ 生成 → 引用校验。
+3. 将本地能力封装为工具注册表，工具输入输出有 schema 与错误处理，后续可扩展新工具。
 4. 回答必须返回引用（消息 ID/群/时间），无依据时拒答。
-5. 支持 LLM 与规则引擎双模式降级，SSE 流式输出，客户端断开中断推理。
+5. 支持 rule/llm/auto 三模式：LLM 失败或未配置时自动降级到规则链路，落盘错误 trace。
 6. 增加鉴权（本地 token/白名单）与限流，防止内部服务裸奔。
 
 验收：
 
 - 端到端问答用例通过：事实类、时间敏感类、无答案类各 >= 5 条。
 - 回答引用可追踪到原始消息；无答案场景正确拒答率 >= [待定：95%]。
-- P50 响应 <= [待定：3s]，P95 响应 <= [待定：8s]。
+- 每次问答落盘 run + 完整步骤 trace，可回放输入/输出/工具/耗时/引用。
 - 原有 `/api/messages`、`/api/stats`、`/api/sync` 回归通过。
+
+当前状态：已完成 user 身份基线（2026-08-12），bot 权限开通后复验。
+
+M4 当前进度（2026-08-12，user 身份基线）：
+
+- [x] `agent/protocol.py`：question/citation/step/trace 协议，输入输出 JSON 可序列化。
+- [x] `agent/tools.py`：工具注册表 + `search` 工具，调用索引检索并返回消息级证据。
+- [x] `agent/harness.py`：rule/llm/auto 三模式，Planner 失败自动降级，
+  LLM 引用必须命中真实消息，无依据拒答，错误 trace 落盘。
+- [x] 护栏：问题/回答长度、证据条数、最大步骤、敏感词拦截。
+- [x] `agent/repository.py` + DB 迁移 v6：`agent_runs`、`agent_traces`，stats/metrics 扩展。
+- [x] CLI：`agent ask/runs/trace/stats`；API：`/api/agent/ask`、`/api/agent/runs[/<id>]`、`/api/agent/stats`。
+- [x] API 鉴权（Bearer / X-API-Token）与进程内限流。
+- [x] 真实库验收：rule 问答返回 7 条消息级引用、170 token、35ms；runs/trace/stats 可回放。
+- [x] 48 项单元测试全绿。
+- [ ] bot 权限开通后，用 bot 身份同步并复跑 agent ask/runs/trace。
 
 ### M5 评测与业务闭环
 

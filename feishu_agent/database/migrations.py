@@ -315,6 +315,54 @@ def _apply_v5(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v6(conn: sqlite3.Connection) -> None:
+    """M4: agent runs and replayable intermediate trace steps."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trace_id TEXT NOT NULL UNIQUE,
+            question TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            answer TEXT,
+            refusal_reason TEXT,
+            degraded INTEGER NOT NULL DEFAULT 0,
+            chat_ids_json TEXT NOT NULL DEFAULT '[]',
+            citations_json TEXT NOT NULL DEFAULT '[]',
+            tokens INTEGER NOT NULL DEFAULT 0,
+            latency_ms INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_finished
+        ON agent_runs(finished_at);
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_status
+        ON agent_runs(status);
+
+        CREATE TABLE IF NOT EXISTS agent_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            trace_id TEXT NOT NULL,
+            step_seq INTEGER NOT NULL,
+            step_kind TEXT NOT NULL,
+            tool TEXT,
+            status TEXT NOT NULL,
+            input_json TEXT,
+            output_json TEXT,
+            error TEXT,
+            latency_ms INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            UNIQUE(run_id, step_seq)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_traces_run
+        ON agent_traces(run_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_traces_trace
+        ON agent_traces(trace_id);
+        """
+    )
+
+
 def _backfill_normalized(conn: sqlite3.Connection) -> None:
     """Fill normalized columns and an initial version row for legacy messages."""
     rows = conn.execute(
@@ -406,5 +454,10 @@ MIGRATIONS = [
         5,
         "M3 AI summary: structured summary tables",
         _apply_v5,
+    ),
+    Migration(
+        6,
+        "M4 agent harness: agent runs and trace steps",
+        _apply_v6,
     ),
 ]

@@ -4,9 +4,10 @@ LarkNova 是在现有飞书消息同步 MVP 基础上迭代的**企业飞书知�
 
 开放平台接入 → 数据底座 → 知识图谱 → Agent/Harness 编排 → 可信评测 → 业务闭环。
 
-当前阶段：`M3 AI 摘要与上下文`（user 身份基线，核心已完成）。
+当前阶段：`M4 Agent + Harness`（user 身份基线，核心已完成）。
 由于机器人暂无法加入测试群，项目按 `LARK_IDENTITY=user` 继续推进；
-bot 权限窗口已预留，代码侧不依赖 bot 身份完成数据管道、索引与摘要，权限开通后补验。
+bot 权限窗口已预留，代码侧不依赖 bot 身份完成数据管道、索引、摘要与 Agent 链路，
+权限开通后补验。
 
 ## 目标架构
 
@@ -23,7 +24,7 @@ M2 知识层：thread/话题切分、FTS5 + 稀疏向量索引、实体与关系
 M3 AI 摘要：结论 + 依据 + 待办、增量摘要、token 预算
         │
         ▼
-M4 Agent + Harness：LangGraph 编排、MCP 工具、降级与 trace
+M4 Agent + Harness：自研 Harness 编排、工具注册表、降级与 trace
         │
         ▼
 M5 评测闭环：黄金测试集、检索/问答指标、Badcase 迭代
@@ -37,18 +38,22 @@ M6 交付：文档、Demo、pytest、resume_metrics.json
 - 本地库：2 个内部群、22 条消息（其中可索引 12 条，其余为系统提示/低信号系统消息），消息类型含 `text/system` 等。
 - 用户身份同步已打通：全量 + 增量双游标、`message_id` 幂等、单群失败隔离，同步结果写入 `sync_runs`。
 - M1 已完成核心代码：富文本/交互/合并转发归一化、`content_hash`、编辑/撤回审计
-  `message_versions`、DB 迁移机制（v2/v3/v4）、同步指标与 `normalize --rebuild` 重建命令。
+  `message_versions`、DB 迁移机制（v2/v3/v4/v5/v6）、同步指标与 `normalize --rebuild` 重建命令。
 - M2 已完成核心代码：thread/时间窗口 chunk、中文 bigram + FTS5 BM25、
   稀疏 TF-IDF 与 RRF 融合检索、SQLite 规则知识图谱（entities/edges）、
   重建/增量/一致性/搜索/图谱 CLI、同步后自动增量索引。
 - M3 已完成核心代码：rule 确定性摘要 + LLM 可选模式、结论/依据/待办结构化输出、
   重建/增量/一致性/状态 CLI 与 API、同步后自动增量摘要、token 预算统计。
+- M4 已完成核心代码：自研标准库 AgentHarness（search 工具 + 步骤 trace）、
+  rule/llm/auto 三模式、无依据拒答、LLM 引用校验、敏感词与预算护栏、
+  `agent_runs/agent_traces` 持久化、`agent ask/runs/trace/stats` CLI、
+  `/api/agent/*` 鉴权与限流。
 - 机器人身份可枚举群聊，读取消息因缺少 `im:message:readonly` 返回 `230027`。
 - M0 已落地：`FEISHU_AGENT_ALLOWED_CHAT_IDS` 白名单、外部群默认排除、
   `python -m feishu_agent.main doctor` 可一键检测权限与数据边界，`boundary` 可审计/清理历史越界数据；
   M0 代码已完成，bot 实跑等待权限。
 
-## M0/M1/M2/M3 验收清单
+## M0/M1/M2/M3/M4 验收清单
 
 ```text
 [x] 白名单外部群/非白名单群不入库
@@ -64,11 +69,15 @@ M6 交付：文档、Demo、pytest、resume_metrics.json
 [x] M2 consistency 通过：索引覆盖与可索引源消息一致
 [x] 中文/英文混合检索可溯源：返回 chunk、消息 ID、时间、发送者
 [x] graph stats/entity 可查询（4 实体 / 26 mentions / 17 边）
-[x] 39 项单元测试全绿（M3 加入摘要仓库/LLM 配置/同步钩子）
+[x] M3 阶段累计 39 项单元测试全绿
 [x] M3 摘要重建：2 群、12 条索引消息、3 个 chunk、生成 2 条摘要
 [x] M3 summary consistency 通过：摘要覆盖与索引消息一致
 [x] M3 summary incremental 幂等：rebuild 后返回 no_changes
 [x] M3 摘要可溯源：结构字段 + source_message_ids + hash 可查询
+[x] 48 项单元测试全绿（M4 加入 AgentHarness/API/鉴权/限流）
+[x] M4 rule 问答：真实库可回答、可拒答、结果带消息级引用
+[x] M4 trace 可回放：agent runs/trace 返回完整输入/输出/耗时/引用
+[x] M4 API：/api/agent/ask、runs、stats 可用，token/限流有测试
 [ ] 飞书后台开通 im:message:readonly（权限窗口）
 [ ] LARK_IDENTITY=bot 后 sync 无 230027（权限窗口）
 [ ] 入库会话集合与白名单一致，bot 实跑补验
@@ -97,9 +106,13 @@ feishu_agent/
   config.py                     环境变量与运行参数（身份、白名单、外部群策略）
   feishu/client.py              lark-cli 封装（会话 + 消息）
   database/db.py                SQLite 表结构与查询
-  database/migrations.py        幂等 DB 迁移（v2/v3/v4/v5）
+  database/migrations.py        幂等 DB 迁移（v2/v3/v4/v5/v6）
   normalize.py                  富文本归一化与内容摘要
   sync/runner.py                全量/增量同步 + 数据边界过滤 + 失败隔离
+  agent/protocol.py             Agent 问题/引用/步骤/回答协议
+  agent/repository.py           agent_runs/agent_traces 持久化
+  agent/tools.py                工具注册表（search 等可扩展工具）
+  agent/harness.py              自研 AgentHarness：rule/llm/auto + 降级 + trace
   index/chunker.py              thread/时间窗口 chunk 生成
   index/tokenizer.py            中文 bigram + ASCII token、FTS5 安全编码
   index/repository.py           重建/增量/一致性/混合检索/图谱仓库
@@ -112,8 +125,8 @@ feishu_agent/
   doctor.py                     bot 权限与数据边界体检
   boundary.py                   本地库边界审计与显式清理
   api/server.py                 标准库 HTTP API
-  main.py                       CLI（sync/doctor/boundary/stats/metrics/normalize/index/search/graph/summary/serve）
-tests/             M0/M1/M2/M3 自动化测试
+  main.py                       CLI（sync/doctor/boundary/stats/metrics/normalize/index/search/graph/summary/agent/serve）
+tests/             M0/M1/M2/M3/M4 自动化测试
 docs/ROADMAP.md    分阶段规划与验收
 docs/PLAN.md       详细任务拆解
 data/agent.db      本地 SQLite 数据库（不入库）
@@ -134,6 +147,13 @@ FEISHU_AGENT_SUMMARY_MIN_NEW_MESSAGES=1
 FEISHU_AGENT_LLM_API_URL=
 FEISHU_AGENT_LLM_API_KEY=
 FEISHU_AGENT_LLM_MODEL=
+FEISHU_AGENT_MAX_QUESTION_CHARS=2000
+FEISHU_AGENT_MAX_ANSWER_CHARS=2000
+FEISHU_AGENT_MAX_EVIDENCE_ITEMS=10
+FEISHU_AGENT_MAX_STEPS=5
+FEISHU_AGENT_SENSITIVE_WORDS=password,secret,api_key,access_token,密钥,密码,身份证号,银行卡号
+FEISHU_AGENT_API_TOKEN=
+FEISHU_AGENT_RATE_LIMIT_PER_MIN=0
 LARK_NODE=node
 LARK_CLI_JS=D:\App\nodejs\node_global\node_modules\@larksuite\cli\scripts\run.js
 ```
@@ -196,9 +216,16 @@ python -m feishu_agent.main summary list --limit 10
 python -m feishu_agent.main summary consistency
 python -m feishu_agent.main summary status
 
+# M4 Agent：rule 是确定性基线；llm/auto 需要配置 OpenAI 兼容端点
+python -m feishu_agent.main agent ask "项目预算怎么安排的？" --mode rule
+python -m feishu_agent.main agent runs --limit 10
+python -m feishu_agent.main agent trace 977b3545a0b14eeb9fc942987a10c12e
+python -m feishu_agent.main agent stats
+
 # 启动 HTTP API，启动时同步一次，之后每 60 秒增量同步
 python -m feishu_agent.main serve --port 8080 `
-  --interval 60 --sync-on-start --identity user
+  --interval 60 --sync-on-start --identity user `
+  --api-token your-token --rate-limit-per-min 60
 
 # bot 权限开通且机器人加入白名单群后，再做一次复验
 python -m feishu_agent.main doctor --identity bot
@@ -216,7 +243,8 @@ python -m unittest discover -s tests -v
 覆盖内容：白名单过滤、外部群排除、显式 `--chat-id` 仍受白名单约束、
 `doctor` 对 `230027` 的识别与修复提示、`boundary` 本地审计/清理、消息幂等写入、
 归一化、编辑/撤回审计、DB 迁移回填、同步指标与单群失败隔离、
-索引重建/增量/一致性/图谱、摘要重建/增量幂等/LLM 配置校验。
+索引重建/增量/一致性/图谱、摘要重建/增量幂等/LLM 配置校验、
+Agent rule/llm/auto 链路、无依据拒答、敏感词、引用校验、API 鉴权与限流。
 
 ## API 接口
 
@@ -239,6 +267,11 @@ GET  /api/summaries?chat_id=oc_xxx&limit=10
 GET  /api/summaries/status
 POST /api/summaries/rebuild     {"mode": "rule", "chat_ids": []}
 POST /api/summaries/incremental {"mode": "rule", "chat_ids": []}
+POST /api/agent/ask             {"question": "...", "mode": "rule"}
+GET  /api/agent/runs?limit=10
+GET  /api/agent/runs/<id>
+GET  /api/agent/stats
+# /api/agent/* 支持 Bearer / X-API-Token 鉴权，可通过环境变量开启限流
 ```
 
 ## 后续阶段
@@ -247,7 +280,8 @@ M2 主题组织与索引：thread/时间窗口 chunk、FTS5 + 稀疏 TF-IDF 混�
 实体关系知识图谱与增量索引（user 基线核心已完成）。
 M3 AI 摘要与上下文：结论 + 依据 + 待办结构化摘要、增量补充、token 预算
 （user 基线核心已完成）。
-M4 Agent + Harness：LangGraph、MCP 工具、降级与 trace。
+M4 Agent + Harness：自研标准库 Harness + 工具注册表、rule/llm/auto 降级与 trace
+（user 基线核心已完成）。
 M5 评测闭环：黄金测试集、检索/问答指标、Badcase 迭代。
 M6 交付与简历固化：README、Demo、可复现指标。
 

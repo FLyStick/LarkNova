@@ -23,7 +23,7 @@ class MigrationTests(unittest.TestCase):
                         "SELECT version FROM schema_migrations ORDER BY version"
                     )
                 ]
-                self.assertEqual(versions, [2, 3, 4, 5])
+                self.assertEqual(versions, [2, 3, 4, 5, 6])
             finally:
                 conn.close()
             db.init()
@@ -32,7 +32,7 @@ class MigrationTests(unittest.TestCase):
                 versions = conn.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
-                self.assertEqual(versions, 4)
+                self.assertEqual(versions, 5)
             finally:
                 conn.close()
 

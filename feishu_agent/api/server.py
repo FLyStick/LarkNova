@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import urllib.parse
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from feishu_agent.agent.protocol import AgentConfigError
+from feishu_agent.agent.repository import AgentRepository
 from feishu_agent.index.repository import IndexRepository
 from feishu_agent.summary.repository import SummaryRepository
 from feishu_agent.sync.runner import SyncRunner
@@ -28,6 +33,16 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
         route = parsed.path
+        if route.startswith("/api/agent/"):
+            if not self._agent_authorized():
+                self._send_json({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            if self._rate_limited():
+                self._send_json(
+                    {"ok": False, "error": "rate_limit_exceeded"},
+                    status=429,
+                )
+                return
         if route == "/health":
             self._send_json(
                 {
@@ -124,12 +139,42 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "count": len(items), "summaries": items})
         elif route == "/api/summaries/status":
             self._send_json({"ok": True, **self._new_summary().status()})
+        elif route == "/api/agent/runs":
+            query = urllib.parse.parse_qs(parsed.query)
+            runs = AgentRepository(self._new_db()).list_runs(
+                limit=_first_int(query, "limit", 20)
+            )
+            self._send_json({"ok": True, "runs": runs})
+        elif route == "/api/agent/stats":
+            self._send_json(
+                {"ok": True, **AgentRepository(self._new_db()).stats()}
+            )
+        elif route.startswith("/api/agent/runs/"):
+            run_id = urllib.parse.unquote(route.split("/", 4)[-1])
+            run = AgentRepository(self._new_db()).get(run_id)
+            if run is None:
+                self._send_json(
+                    {"ok": False, "error": "run_not_found"},
+                    status=404,
+                )
+            else:
+                self._send_json({"ok": True, "run": run})
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
         request = self._read_json_body()
+        if parsed.path.startswith("/api/agent/"):
+            if not self._agent_authorized():
+                self._send_json({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            if self._rate_limited():
+                self._send_json(
+                    {"ok": False, "error": "rate_limit_exceeded"},
+                    status=429,
+                )
+                return
         if parsed.path == "/api/sync":
             try:
                 result = self.server.runner.sync_all(full=bool(request.get("full")))
@@ -176,6 +221,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, **result})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=500)
+        elif parsed.path == "/api/agent/ask":
+            try:
+                agent = self.server.agent_factory()
+                trace = agent.ask(
+                    question=str(request.get("question") or ""),
+                    mode=str(request.get("mode") or "auto"),
+                    chat_ids=_chat_ids(request),
+                )
+                self._send_json({"ok": True, "trace": trace.to_dict()})
+            except AgentConfigError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
@@ -217,6 +275,29 @@ class ApiHandler(BaseHTTPRequestHandler):
             return factory()
         return SummaryRepository(self._new_db())
 
+    def _agent_authorized(self) -> bool:
+        token = str(getattr(self.server, "api_token", "") or "")
+        if not token:
+            return True
+        header = str(self.headers.get("Authorization") or "")
+        if header.startswith("Bearer "):
+            return header[len("Bearer ") :].strip() == token
+        return str(self.headers.get("X-API-Token") or "").strip() == token
+
+    def _rate_limited(self) -> bool:
+        per_minute = int(getattr(self.server, "rate_limit_per_min", 0) or 0)
+        if per_minute <= 0:
+            return False
+        now = time.monotonic()
+        with self.server.rate_lock:
+            hits = self.server.rate_hits
+            while hits and now - hits[0] >= 60:
+                hits.popleft()
+            if len(hits) >= per_minute:
+                return True
+            hits.append(now)
+        return False
+
     def _send_json(self, obj: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
@@ -239,11 +320,19 @@ class FeishuAgentServer(ThreadingHTTPServer):
         db_factory,
         index_factory=None,
         summary_factory=None,
+        agent_factory=None,
+        api_token="",
+        rate_limit_per_min=0,
     ) -> None:
         self.runner = runner
         self.db_factory = db_factory
         self.index_factory = index_factory
         self.summary_factory = summary_factory
+        self.agent_factory = agent_factory
+        self.api_token = api_token
+        self.rate_limit_per_min = max(0, int(rate_limit_per_min or 0))
+        self.rate_hits: deque[float] = deque()
+        self.rate_lock = threading.Lock()
         super().__init__(addr, ApiHandler)
 
 
@@ -260,6 +349,9 @@ def create_server(
     db_factory,
     index_factory=None,
     summary_factory=None,
+    agent_factory=None,
+    api_token="",
+    rate_limit_per_min=0,
 ) -> FeishuAgentServer:
     return FeishuAgentServer(
         addr,
@@ -267,4 +359,7 @@ def create_server(
         db_factory,
         index_factory,
         summary_factory,
+        agent_factory,
+        api_token,
+        rate_limit_per_min,
     )
