@@ -1,4 +1,4 @@
-"""Optional OpenAI-compatible LLM planner for the M4 agent harness."""
+"""可选 OpenAI 兼容 LLM 规划器，用于 M4 Agent 执行器的 LLM 模式。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _OUTPUT_FORMAT = (
 
 
 class AgentLlmClient:
-    """Call an OpenAI-compatible /chat/completions endpoint for plan JSON."""
+    """调用 OpenAI 兼容 /chat/completions 接口，让 LLM 输出规划 JSON。"""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
@@ -37,7 +37,7 @@ class AgentLlmClient:
         chat_ids: list[str] | None = None,
         tool_schema: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Return a validated planning payload for the harness."""
+        """生成并校验一次 LLM 规划请求，返回工具清单、答案与引用。"""
         if not self.settings.llm_api_url:
             raise AgentConfigError(
                 "FEISHU_AGENT_LLM_API_URL is empty; configure the endpoint "
@@ -84,6 +84,7 @@ class AgentLlmClient:
         chat_ids: list[str] | None,
         tool_schema: dict[str, dict[str, Any]] | None,
     ) -> str:
+        """把问题、查询范围和工具 schema 拼装成发送给 LLM 的用户提示。"""
         tools_block = json.dumps(tool_schema or {}, ensure_ascii=False)
         scope = "全部可查询群" if not chat_ids else "、".join(chat_ids[:20])
         return (
@@ -94,6 +95,7 @@ class AgentLlmClient:
         )
 
     def _post(self, payload: dict[str, Any]) -> str:
+        """调用 /chat/completions，并做超时和异常统一包装。"""
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             self.settings.llm_api_url,
@@ -121,6 +123,7 @@ class AgentLlmClient:
 
     @staticmethod
     def _extract_content(raw: str) -> str:
+        """从标准 chat completion 响应中提取 model 生成的文本内容。"""
         try:
             parsed = json.loads(raw)
             content = parsed["choices"][0]["message"]["content"]
@@ -135,6 +138,7 @@ def _extract_json(
     content: str,
     error_type: type[AgentGenError],
 ) -> dict[str, Any]:
+    """从 LLM 文本中解析 JSON 对象，兼容 Markdown 代码块和前后多余文字。"""
     text = content.strip()
     if text.startswith("```"):
         lines = text.splitlines()

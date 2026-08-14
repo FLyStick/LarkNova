@@ -1,4 +1,4 @@
-"""Shared types for summary generation and persistence."""
+"""摘要生成与持久化的共享类型、协议与异常定义。"""
 
 from __future__ import annotations
 
@@ -7,15 +7,17 @@ from typing import Any, Protocol
 
 
 class SummaryConfigError(RuntimeError):
-    """Raised when an LLM-backed summarizer is used without configuration."""
+    """使用 LLM 摘要器但缺少必要配置时抛出。"""
 
 
 class SummaryGenError(RuntimeError):
-    """Raised when an LLM response cannot be parsed into a summary."""
+    """LLM 响应无法解析为合法摘要结构时抛出。"""
 
 
 @dataclass
 class SummaryResult:
+    """一次摘要生成返回的结构化结果，含来源与 token 统计。"""
+
     conclusion: str
     evidence: list[str]
     todo: list[str]
@@ -29,6 +31,7 @@ class SummaryResult:
     latency_ms: int = 0
 
     def to_structure(self) -> dict[str, Any]:
+        """返回用于落库与展示的 JSON 结构字段。"""
         return {
             "conclusion": self.conclusion,
             "evidence": self.evidence,
@@ -40,6 +43,8 @@ class SummaryResult:
 
 
 class Summarizer(Protocol):
+    """摘要器统一接口：按群聊块生成结构化摘要。"""
+
     mode: str
 
     def summarize_chat(
@@ -49,4 +54,4 @@ class Summarizer(Protocol):
         chunks: list[dict[str, Any]],
         now_iso: str,
     ) -> SummaryResult:
-        """Build a structured summary for one chat's indexed messages."""
+        """为一个群聊的已索引消息构建结构化摘要。"""

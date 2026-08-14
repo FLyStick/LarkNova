@@ -1,8 +1,7 @@
-"""M5 synthetic corpus: deterministic multi-department chats for local testing.
+"""M5 合成语料：用于本地测试的确定性多部门对话数据。
 
-The seed writes only fact-source rows (chats/messages) with stable synthetic
-message ids. Derived indexes and summaries are rebuilt through the same
-repositories used by production, so every M5 metric is reproducible.
+seed 只写入事实源数据（群聊/消息），并使用稳定的合成消息 id；
+派生索引与摘要继续走生产同款仓库重建，因此 M5 指标可复现。
 """
 
 from __future__ import annotations
@@ -694,6 +693,7 @@ _FILLER_DATES = ("08-12", "08-13")
 
 
 def _filler_topics(chat_key: str) -> list[dict[str, Any]]:
+    """为有成员配置的群生成两天日常同步消息，弥补真实话题稀疏。"""
     if chat_key not in PEOPLE or not PEOPLE[chat_key]:
         return []
     senders = list(PEOPLE[chat_key])
@@ -727,22 +727,21 @@ def _filler_topics(chat_key: str) -> list[dict[str, Any]]:
 
 
 def message_id_for(chat_key: str, topic_id: str, index: int) -> str:
+    """按群/主题/序号生成稳定的合成消息 id。"""
     return f"syn_{chat_key}_{topic_id}_{index:02d}"
 
 
 def build_messages(limit: int | None = None) -> list[dict[str, Any]]:
-    """Build deterministic messages in chat/topic order.
-
-    ``limit`` caps the total message count and is useful for quick eval smoke
-    runs; the default (``None`` / ``0``) builds the full corpus.
-    """
+    """按群和主题顺序生成确定性消息；`limit` 可限制条数用于快速冒烟。"""
     limit = 0 if limit is None else int(limit)
     result: list[dict[str, Any]] = []
     for chat in CHAT_DEFS:
         chat_key = str(chat["key"])
         chat_id = str(chat["chat_id"])
         chat_people = PEOPLE.get(chat_key, {})
+        # position 全局递增，保证索引重建时消息顺序稳定。
         position = 0
+        # 结构化主题在前，日常同步话题在后，共同组成完整语料。
         topics = list(TOPIC_DEFS.get(chat_key, [])) + _filler_topics(chat_key)
         for topic in topics:
             previous_id: str | None = None
@@ -751,6 +750,7 @@ def build_messages(limit: int | None = None) -> list[dict[str, Any]]:
                 position += 1
                 sender_key = str(item["sender"])
                 message_id = message_id_for(chat_key, topic_id, index)
+                # 每条消息都带完整元数据，与真实同步链路使用同一落库格式。
                 payload: dict[str, Any] = {
                     "message_id": message_id,
                     "chat_id": chat_id,
@@ -764,6 +764,7 @@ def build_messages(limit: int | None = None) -> list[dict[str, Any]]:
                     },
                     "thread_id": f"th_{chat_key}_{topic_id}",
                 }
+                # 标记 reply 的消息会引用同主题上一条消息，用于图谱回复边。
                 if item.get("reply") and previous_id:
                     payload["reply"] = {"message_id": previous_id}
                 result.append(payload)
@@ -773,8 +774,10 @@ def build_messages(limit: int | None = None) -> list[dict[str, Any]]:
     return result
 
 
+# 全量语料总数在模块加载时计算一次，便于提示文案与断言复用。
 TOTAL_MESSAGES = len(build_messages())
 
+# 黄金用例直接引用的确定性消息，用于校验检索与引用是否命中。
 GOLDEN_REF_SPECS: tuple[tuple[str, str, int], ...] = (
     ("hr", "hc", 1),
     ("hr", "zhangwei", 1),
@@ -821,8 +824,9 @@ def seed_database(
     limit: int | None = None,
     reset_derived: bool = True,
 ) -> dict[str, Any]:
-    """Seed chats/messages and optionally rebuild all derived layers."""
+    """写入合成群/消息，并按需重建派生的索引与摘要。"""
     db.init()
+    # 先落群元数据，再按顺序写入消息，保持外键与顺序约束。
     for chat in CHAT_DEFS:
         db.upsert_chat({k: v for k, v in chat.items() if k != "key"})
     messages = build_messages(limit)
@@ -832,6 +836,7 @@ def seed_database(
     index: dict[str, Any] | None = None
     summary: dict[str, Any] | None = None
     if reset_derived:
+        # 派生层走生产同款仓库重建，保证评估与线上行为一致。
         index = IndexRepository(db).rebuild()
         summary = SummaryRepository(db, Settings()).rebuild(mode="rule")
     return {
@@ -846,7 +851,7 @@ def seed_database(
 
 
 def synthetic_status(db: Database) -> dict[str, Any]:
-    """Report whether the golden synthetic corpus is present and indexed."""
+    """报告合成语料是否完整：群消息数、黄金引用缺失与派生层状态。"""
     db.init()
     per_chat: list[dict[str, Any]] = []
     total = 0

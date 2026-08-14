@@ -1,4 +1,4 @@
-"""M5 synthetic corpus package."""
+"""M5 合成语料包：生成可复现的多部门对话测试数据。"""
 
 from feishu_agent.synthetic.seed import (
     CHAT_DEFS,

@@ -1,4 +1,4 @@
-"""Optional OpenAI-compatible LLM summarizer; rule mode remains the default."""
+"""可选 OpenAI 兼容 LLM 摘要器；默认仍使用规则模式。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ _SYSTEM_PROMPT = (
 
 
 class LlmSummarizer:
-    """Call an OpenAI-compatible /chat/completions endpoint for summaries."""
+    """调用 OpenAI 兼容的 /chat/completions 接口生成结构化摘要。"""
 
     mode = "llm"
 
@@ -35,12 +35,15 @@ class LlmSummarizer:
         chunks: list[dict[str, Any]],
         now_iso: str,
     ) -> SummaryResult:
+        """组装提示词请求 LLM，并把响应解析为 `SummaryResult`。"""
         started = time.perf_counter()
+        # 未配置端点时提前失败，避免运行中途才发现不可用。
         if not self.settings.llm_api_url:
             raise SummaryConfigError(
                 "FEISHU_AGENT_LLM_API_URL is empty; configure the endpoint "
                 "or use `--mode rule`"
             )
+        # 展平所有 chunk 中的消息，保持原始顺序用于上下文构建。
         messages = []
         for chunk in chunks:
             messages.extend(chunk.get("messages") or [])
@@ -57,6 +60,7 @@ class LlmSummarizer:
             "对话片段：\n"
             + "\n".join(context_lines)
         )
+        # 提示词显式规定 JSON 字段，降低模型输出结构的漂移概率。
         payload = {
             "model": self.settings.llm_model or "default",
             "messages": [
@@ -65,6 +69,7 @@ class LlmSummarizer:
             ],
             "temperature": 0.2,
         }
+        # 请求失败不重试，统一转成可诊断的 SummaryGenError。
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             self.settings.llm_api_url,
@@ -73,6 +78,7 @@ class LlmSummarizer:
             headers={"Content-Type": "application/json"},
         )
         if self.settings.llm_api_key:
+            # 兼容常见 OpenAI 风格的 Bearer Token 鉴权。
             request.add_header(
                 "Authorization",
                 f"Bearer {self.settings.llm_api_key}",
@@ -87,6 +93,7 @@ class LlmSummarizer:
             raise SummaryGenError(f"LLM request failed: {exc}") from exc
 
         try:
+            # 模型可能在 JSON 外层再包一层字符串，这里统一做二次解析。
             parsed = json.loads(raw)
             content = parsed["choices"][0]["message"]["content"]
             data = json.loads(content)
@@ -95,6 +102,7 @@ class LlmSummarizer:
                 f"LLM response is not a valid summary JSON: {exc}"
             ) from exc
 
+        # 用 dict.fromkeys 去重并保持消息首次出现顺序，便于溯源展示。
         source_message_ids = list(
             dict.fromkeys(str(msg["message_id"]) for msg in messages)
         )
@@ -118,12 +126,14 @@ class LlmSummarizer:
 
 
 def _string(value: Any) -> str:
+    """把任意字段值规整为去除首尾空白的字符串。"""
     if value is None:
         return ""
     return str(value).strip()
 
 
 def _string_list(value: Any) -> list[str]:
+    """把列表或逗号/换行分隔文本转成去重后的字符串列表。"""
     if value is None:
         return []
     if isinstance(value, list):
@@ -138,4 +148,5 @@ def _string_list(value: Any) -> list[str]:
 
 
 def re_split(text: str) -> list[str]:
+    """按中英文逗号与换行拆分成候选条目。"""
     return text.replace("，", "\n").replace(",", "\n").splitlines()

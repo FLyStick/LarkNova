@@ -1,3 +1,3 @@
-"""Topic organization, retrieval indexing and knowledge graph for M2."""
+"""主题组织、检索索引与知识图谱（M2）。"""
 
 INDEX_VERSION = "m2-v1"

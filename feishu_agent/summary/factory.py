@@ -1,4 +1,4 @@
-"""Summary generator factory."""
+"""摘要生成器工厂：按配置模式返回规则或 LLM 实现。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from feishu_agent.summary.rule_summarizer import RuleSummarizer
 
 
 def make_summarizer(mode: str, settings: Any) -> Any:
-    """Return a rule or LLM summarizer for the configured mode."""
+    """根据配置模式返回规则摘要器或 LLM 摘要器。"""
     normalized = (mode or "rule").strip().lower()
     if normalized == "rule":
         return RuleSummarizer(settings)

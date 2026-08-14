@@ -1,4 +1,4 @@
-"""Rule-based entity and relation extraction for the local knowledge graph."""
+"""本地知识图谱的规则式实体与关系抽取。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ _AMOUNT_RE = re.compile(r"(?:[¥￥]\s*)?\d+(?:\.\d+)?(?:[万亿]|[%％]|元)")
 
 
 def entity_id(entity_type: str, value: str) -> str:
+    """按类型与规范化值生成稳定的实体 id，供图谱去重与引用。"""
     digest = hashlib.sha256(f"{entity_type}\0{value}".encode("utf-8")).hexdigest()
     return digest
 
@@ -30,11 +31,13 @@ def extract_message_entities(
     chat_name: str = "",
     chat_id: str = "",
 ) -> list[dict[str, Any]]:
-    """Extract deterministic entities without any external NLP dependency."""
+    """不依赖外部 NLP，仅用规则抽取确定性的实体列表。"""
+    # 用 dict 以实体 id 为键合并重复实体，并累加出现次数。
     result: dict[str, dict[str, Any]] = {}
     text = str(message.get("content_normalized") or "").strip()
     group_value = chat_name.strip() or chat_id.strip() or "未命名群"
 
+    # 发送者、被 @ 成员和所属群是消息自带的结构化实体。
     _add(result, "person", str(message.get("sender_name") or "").strip(), 1)
     for mention in _parse_mentions(message):
         _add(
@@ -45,6 +48,7 @@ def extract_message_entities(
         )
     _add(result, "group", group_value, 1)
 
+    # 正文中按正则抽取部门、日期、资源 id、URL 和金额等主题实体。
     for value in _DEPARTMENT_RE.findall(text):
         _add(result, "department", value, 1)
     for value in _DATE_RE.findall(text):
@@ -60,10 +64,12 @@ def extract_message_entities(
 
 
 def reply_to_message_id(message: dict[str, Any] | Any) -> str | None:
+    """从消息字段或 raw_json 中解析被回复消息 id，供回复关系建边。"""
     for key in ("reply_to", "reply_message_id"):
         value = message.get(key)
         if value:
             return str(value)
+    # 归一化前充分字段时，尝试从原始 JSON 中还原回复信息。
     raw = message.get("raw_json")
     if not raw:
         return None
@@ -73,6 +79,7 @@ def reply_to_message_id(message: dict[str, Any] | Any) -> str | None:
         return None
     if not isinstance(parsed, dict):
         return None
+    # 兼容平铺字段与常见的嵌套 reply 对象两种原始结构。
     for key in ("reply_to", "reply_message_id"):
         if parsed.get(key):
             return str(parsed[key])
@@ -83,9 +90,11 @@ def reply_to_message_id(message: dict[str, Any] | Any) -> str | None:
 
 
 def _parse_mentions(message: dict[str, Any] | Any) -> list[dict[str, Any]]:
+    """把 mentions 从 JSON 字符串、单对象规范化为字典列表。"""
     raw = message.get("mentions")
     if raw is None:
         raw = message.get("mentions_json")
+    # 库里可能以 JSON 字符串存储，先解析再统一处理。
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -104,6 +113,7 @@ def _add(
     value: str,
     occurrence: int,
 ) -> None:
+    """按实体 id 合并实体；重复实体仅增加 occurrence 计数。"""
     value = value.strip()
     if not value:
         return

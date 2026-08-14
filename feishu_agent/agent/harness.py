@@ -1,4 +1,4 @@
-"""M4 harness: one ask() path with rule/LLM modes, tool steps and traces."""
+"""M4 Agent 执行器：统一 ask() 路径，支持规则/LLM 模式、工具步骤与 trace。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _MODES = {"auto", "rule", "llm"}
 
 
 class AgentHarness:
-    """Route one question through guards, tools and a persisted trace."""
+    """执行一次问答：先过安全护栏，再按规则/LLM 模式运行并持久化 trace。"""
 
     def __init__(
         self,
@@ -48,6 +48,7 @@ class AgentHarness:
         mode: str = "auto",
         chat_ids: list[str] | None = None,
     ) -> AgentTrace:
+        """统一入口：校验模式与安全限制，分发到对应执行路径并记录结果。"""
         started = time.perf_counter()
         created_at = _now_iso()
         question = str(question or "").strip()
@@ -97,6 +98,7 @@ class AgentHarness:
         created_at: str,
         started: float,
     ) -> AgentTrace:
+        """LLM 可用时优先使用 LLM 规划；失败或未配置时降级到规则模式。"""
         if not self._llm_available():
             return self._run_rule(
                 question,
@@ -129,6 +131,7 @@ class AgentHarness:
         mode: str,
         chat_ids: list[str],
     ) -> AgentTrace | None:
+        """执行模式、空问题、长度和敏感词四类安全校验，返回拒绝 trace。"""
         if mode not in _MODES:
             return self._refuse(
                 question,
@@ -177,6 +180,7 @@ class AgentHarness:
         reason: str,
         detail: str,
     ) -> AgentTrace:
+        """构造一条拒绝回答的 trace，reason 便于后续统计与分析。"""
         now = _now_iso()
         return AgentTrace(
             trace_id=uuid.uuid4().hex,
@@ -200,6 +204,7 @@ class AgentHarness:
         degraded: bool = False,
         degrade_error: str = "",
     ) -> AgentTrace:
+        """运行规则引擎并把工具调用转成可回放的步骤，可标记 LLM 降级来源。"""
         result = self.rule_engine.answer(question, chat_ids=chat_ids)
         steps: list[AgentStep] = []
         if degrade_error:
@@ -253,6 +258,7 @@ class AgentHarness:
         mode: str,
         created_at: str,
     ) -> AgentTrace:
+        """运行 LLM 规划器：执行工具调用，并只接受可溯源消息的引用。"""
         plan = self.llm_client.plan(
             question,
             chat_ids=chat_ids or None,
@@ -262,6 +268,7 @@ class AgentHarness:
         if not isinstance(calls, list):
             raise AgentGenError("LLM planning response must contain a tools list")
         max_tools = max(1, int(self.settings.agent_max_steps))
+        # 逐条执行 LLM 选出的工具，同时收集真实返回的证据消息。
         steps: list[AgentStep] = []
         evidence_items: list[dict[str, Any]] = []
         evidence_by_id: dict[str, Citation] = {}
@@ -280,6 +287,7 @@ class AgentHarness:
                             rank=len(evidence_by_id) + 1,
                         )
 
+        # 引用校验：LLM 声称引用的消息必须真实出现在工具返回结果中。
         validated: list[Citation] = []
         seen_ids: set[str] = set()
         for item in (plan.get("citations") or []):
@@ -345,6 +353,7 @@ class AgentHarness:
         created_at: str,
         error: str,
     ) -> AgentTrace:
+        """LLM 规划失败时记录 error 状态的 trace，保留失败原因可审计。"""
         step = AgentStep(
             seq=1,
             kind="plan",
@@ -373,6 +382,7 @@ class AgentHarness:
         seq: int,
         started_at: str,
     ) -> tuple[AgentStep, Any]:
+        """执行单个 LLM 规划的工具调用，非法结构统一记录为错误步骤。"""
         if not isinstance(item, dict):
             return (
                 AgentStep(
@@ -413,6 +423,7 @@ class AgentHarness:
         return step, result
 
     def _answer_from_items(self, items: list[dict[str, Any]]) -> str:
+        """在 LLM 未给答案但工具已返回证据时，按依据列表生成回答。"""
         lines = ["根据本地工具返回的依据："]
         for idx, item in enumerate(
             items[: self.settings.agent_max_evidence_items],
@@ -425,9 +436,11 @@ class AgentHarness:
         return "\n".join(lines)[: self.settings.agent_max_answer_chars]
 
     def _llm_available(self) -> bool:
+        """判断当前是否有可用的 LLM：自定义客户端或已配置接口 URL 均可。"""
         return self._uses_custom_llm or bool(self.settings.llm_api_url)
 
     def _record(self, trace: AgentTrace, started: float) -> AgentTrace:
+        """补全耗时并写入 AgentRepository，返回已持久化的 trace。"""
         trace.finished_at = _now_iso()
         trace.latency_ms = int((time.perf_counter() - started) * 1000)
         db = self.db_factory()
@@ -438,6 +451,7 @@ class AgentHarness:
 
 
 def _citation_from_item(item: dict[str, Any], rank: int) -> Citation:
+    """把证据字典转换成可供展示和溯源的引用对象。"""
     return Citation(
         message_id=str(item.get("message_id") or ""),
         chat_id=str(item.get("chat_id") or ""),
@@ -451,16 +465,19 @@ def _citation_from_item(item: dict[str, Any], rank: int) -> Citation:
 
 
 def _clean_chat_ids(chat_ids: list[str] | None) -> list[str]:
+    """清洗群 id 入参：去空、转字符串，None 返回空列表。"""
     if not chat_ids:
         return []
     return [str(item).strip() for item in chat_ids if str(item).strip()]
 
 
 def _empty_result() -> Any:
+    """返回默认失败的工具结果，避免非法调用中断主流程。"""
     from feishu_agent.agent.tools import ToolResult
 
     return ToolResult(False, [], {"error": "invalid_tool_call"}, "invalid_tool_call")
 
 
 def _now_iso() -> str:
+    """返回带时区的毫秒精度 ISO 时间字符串。"""
     return datetime.now().astimezone().isoformat(timespec="milliseconds")

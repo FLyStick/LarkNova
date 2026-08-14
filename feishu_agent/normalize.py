@@ -1,3 +1,5 @@
+"""消息标准化：把飞书多类型消息归一成可检索文本，并计算内容摘要指纹。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +30,7 @@ _CHILD_KEYS = ("elements", "children", "content", "markdown", "mrkdwn", "plain_t
 
 
 def normalize_message(msg: dict[str, Any]) -> dict[str, Any]:
-    """Return a normalized text snapshot and a stable content digest."""
+    """标准化单条消息，返回清洗后的文本、内容哈希和归一化版本信息。"""
     msg_type = str(msg.get("msg_type") or "text")
     raw_content = msg.get("content")
     error = None
@@ -46,6 +48,7 @@ def normalize_message(msg: dict[str, Any]) -> dict[str, Any]:
 
 
 def message_digest(msg: dict[str, Any]) -> str:
+    """基于消息关键字段生成稳定 SHA-256，用于幂等重建与变更检测。"""
     payload = {
         "msg_type": msg.get("msg_type"),
         "content": msg.get("content"),
@@ -61,6 +64,7 @@ def message_digest(msg: dict[str, Any]) -> str:
 
 
 def _normalize_content(msg_type: str, raw: Any) -> str:
+    """按消息类型递归提取纯文本，交互卡片优先解析 JSON 结构。"""
     if raw is None:
         return ""
     if isinstance(raw, dict):
@@ -83,22 +87,26 @@ def _normalize_content(msg_type: str, raw: Any) -> str:
 
 
 def _strip_markup(text: str) -> str:
+    """去掉 HTML 标签并还原常见实体字符。"""
     return html.unescape(_TAG_RE.sub("", text))
 
 
 def _normalize_inline(text: str) -> str:
+    """把 Markdown 图片与 [Image: ...] 标记统一替换为 [图片: 来源]。"""
     text = _IMAGE_TAG_RE.sub(lambda m: f"[图片: {m.group(1).strip()}]", text)
     text = _IMAGE_MARKER_RE.sub(lambda m: f"[图片: {m.group(1).strip()}]", text)
     return text
 
 
 def _dict_to_text(node: Any) -> str:
+    """递归把富文本结构转换成按行拼接的纯文本。"""
     parts: list[str] = []
     _collect_text(node, parts, set())
     return "\n".join(part for part in parts if part)
 
 
 def _collect_text(node: Any, parts: list[str], seen: set[int]) -> None:
+    """深度遍历消息结构，抽取文本字段并用 seen 防止循环引用。"""
     if isinstance(node, str):
         text = node.strip()
         if text:
@@ -129,6 +137,7 @@ def _collect_text(node: Any, parts: list[str], seen: set[int]) -> None:
 
 
 def _fallback_text(raw: Any) -> str:
+    """归一化失败时兜底：结构直接序列化，其余转字符串。"""
     if isinstance(raw, (dict, list)):
         try:
             return json.dumps(raw, ensure_ascii=False)
@@ -138,6 +147,7 @@ def _fallback_text(raw: Any) -> str:
 
 
 def _clean_text(text: str) -> str:
+    """压缩连续空行并去除首尾空白，保持全文格式稳定。"""
     lines: list[str] = []
     blank = False
     for line in re.split(r"\r?\n", text):

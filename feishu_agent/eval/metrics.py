@@ -1,4 +1,4 @@
-"""Scoring for one trace and aggregate stats for a golden run."""
+"""单条 trace 的指标打分与黄金用例运行后的汇总统计。"""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ from feishu_agent.eval.golden import GoldenCase
 
 
 def evaluate_case(trace: AgentTrace | dict[str, Any], case: GoldenCase) -> dict[str, Any]:
-    """Evaluate one answer against one golden case."""
+    """按一个黄金用例评估一次回答，返回结构化评分结果。"""
     tr = _as_trace(trace)
     answer = str(tr.answer or "")
     citation_ids = [str(item.message_id or "") for item in tr.citations]
+    # 关键词命中要求期望关键词都在答案中出现。
     keyword_hits = [
         keyword
         for keyword in case.expected_keywords
@@ -23,11 +24,14 @@ def evaluate_case(trace: AgentTrace | dict[str, Any], case: GoldenCase) -> dict[
         case.expected_keywords
     )
     reference_set = {str(item) for item in case.reference_ids if str(item).strip()}
+    # 引用命中要求回答引用的消息 id 与期望引用有交集。
     has_reference_citation = bool(reference_set & set(citation_ids))
 
+    # 允许拒答的用例以正确拒答为通过条件。
     if case.allow_refused:
         correct = tr.status == "refused"
     else:
+        # 普通用例：状态正常，且引用命中或关键词全中之一成立即可。
         correct = bool(
             tr.status == "ok"
             and (has_reference_citation or all_keywords)
@@ -56,10 +60,11 @@ def evaluate_case(trace: AgentTrace | dict[str, Any], case: GoldenCase) -> dict[
 
 
 def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute accuracy, refusal behavior and latency/token stats."""
+    """汇总整体准确率、拒答表现以及延迟/token 统计。"""
     total = len(results)
     passed = sum(1 for result in results if result.get("correct"))
 
+    # 按 search/summary/recent/graph 等用例类型分别汇总指标。
     by_type: dict[str, dict[str, Any]] = {}
     for result in results:
         bucket = by_type.setdefault(
@@ -79,6 +84,7 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         ) if bucket["latency_ms"] else 0.0
         bucket.pop("latency_ms", None)
 
+    # 只统计正常回答的引用/关键词命中率，异常结果不进入分母。
     ok_results = [result for result in results if result.get("status") == "ok"]
     refusal_cases = [result for result in results if result.get("allow_refused")]
     refusal_passed = sum(
@@ -130,6 +136,7 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _as_trace(trace: AgentTrace | dict[str, Any]) -> AgentTrace:
+    """把 AgentTrace 或字典统一规整为 AgentTrace 对象。"""
     if isinstance(trace, AgentTrace):
         return trace
     if isinstance(trace, dict):
@@ -138,6 +145,7 @@ def _as_trace(trace: AgentTrace | dict[str, Any]) -> AgentTrace:
 
 
 def _percentile(values: list[int], pct: int) -> float:
+    """按线性位置取百分位，空列表时返回 0。"""
     if not values:
         return 0.0
     ordered = sorted(values)

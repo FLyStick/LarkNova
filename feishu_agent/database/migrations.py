@@ -1,3 +1,5 @@
+"""数据库迁移：以版本号为顺序执行增量建表/补列/回填任务。"""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +13,8 @@ from feishu_agent.normalize import normalize_message
 
 @dataclass(frozen=True)
 class Migration:
+    """描述一个版本化迁移：版本号、说明和具体的建表/回填函数。"""
+
     version: int
     description: str
     apply: Callable[[sqlite3.Connection], None]
@@ -22,13 +26,14 @@ def _ensure_column(
     column: str,
     ddl: str,
 ) -> None:
+    """检查表结构，缺少目标列时通过 ALTER TABLE 补齐。"""
     columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def _apply_v2(conn: sqlite3.Connection) -> None:
-    """M1: normalized text hash, message version audit and sync metrics."""
+    """M1：新增标准化文本/哈希、消息版本审计与同步运行指标表。"""
     _ensure_column(conn, "messages", "content_normalized", "TEXT")
     _ensure_column(conn, "messages", "content_hash", "TEXT")
     _ensure_column(conn, "messages", "normalize_version", "INTEGER DEFAULT 0")
@@ -81,13 +86,13 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v3(conn: sqlite3.Connection) -> None:
-    """Repair databases that recorded v2 before content_normalized existed."""
+    """M1 修复：为早期记录了 v2 但缺列的库补齐 content_normalized 并回填。"""
     _ensure_column(conn, "messages", "content_normalized", "TEXT")
     _backfill_normalized(conn)
 
 
 def _apply_v4(conn: sqlite3.Connection) -> None:
-    """M2: derived topic chunks, FTS5 full-text index, sparse vectors, graph."""
+    """M2：建立主题 chunk、FTS5 全文索引、稀疏向量与知识图谱表。"""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS chunks (
@@ -225,7 +230,7 @@ def _apply_v4(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v5(conn: sqlite3.Connection) -> None:
-    """M3: replace the placeholder summaries table and add run audit records."""
+    """M3：用结构化摘要表替换占位表，并新增摘要运行审计记录。"""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(summaries)")}
     required = {
         "summary_json",
@@ -316,7 +321,7 @@ def _apply_v5(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v6(conn: sqlite3.Connection) -> None:
-    """M4: agent runs and replayable intermediate trace steps."""
+    """M4：新增 Agent 运行表与可回放的中间 trace 步骤表。"""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS agent_runs (
@@ -364,7 +369,7 @@ def _apply_v6(conn: sqlite3.Connection) -> None:
 
 
 def _backfill_normalized(conn: sqlite3.Connection) -> None:
-    """Fill normalized columns and an initial version row for legacy messages."""
+    """为历史消息补齐标准化列，并写入首条 initial 版本记录。"""
     rows = conn.execute(
         """
         SELECT message_id, chat_id, msg_type, raw_json, content, deleted, updated

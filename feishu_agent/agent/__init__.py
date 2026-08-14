@@ -1,4 +1,4 @@
-"""M4 Agent/Harness layer with replayable traces and traceable citations."""
+"""Agent 层：规则/LLM 混合执行器、可回溯工具调用与可回放 trace。"""
 
 from __future__ import annotations
 

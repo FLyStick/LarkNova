@@ -1,3 +1,5 @@
+"""本地数据边界审计：按白名单与外部群策略检查需要清理的群聊数据。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -10,7 +12,11 @@ def audit_local_db(
     allowed_chat_ids: set[str] | None,
     allow_external: bool = False,
 ) -> dict[str, Any]:
-    """Audit local chats against whitelist and external-chat policy."""
+    """审计本地群聊数据，返回违背边界策略、应被删除的群聊清单。
+
+    会先剔除 chat_id 缺失的脏数据，再对每个群调用统一的边界判定函数，
+    最终汇总待删除的消息总量与当前边界配置，方便人工确认后执行清理。
+    """
     chats_to_remove: list[dict[str, Any]] = []
     for chat in db.list_chats():
         chat_id = str(chat.get("chat_id") or "")
@@ -53,4 +59,5 @@ def audit_local_db(
 
 
 def prune_local_db(db: Any, chat_ids: list[str]) -> list[dict[str, int]]:
+    """按群聊 id 逐个删除本地数据，返回每个群删除后的统计结果。"""
     return [db.delete_chat(chat_id) for chat_id in chat_ids]

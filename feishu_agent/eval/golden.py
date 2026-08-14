@@ -1,8 +1,7 @@
-"""Golden cases for M5 resume evaluation.
+"""M5 简历评估黄金用例。
 
-Every case references deterministic messages from the synthetic corpus
-(``feishu_agent/synthetic``), so the same set can be replayed after a
-production database rebuild by re-running the seed.
+每个用例都引用合成语料中的确定性消息（``feishu_agent/synthetic``），
+生产库重建后重新执行 seed 即可复现同一组用例。
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from typing import Any
 
 @dataclass
 class GoldenCase:
-    """One question/expected-evidence pair for the rule-mode baseline."""
+    """一个黄金用例：问题、答案关键词/引用与评估意图的组合。"""
 
     id: str
     question: str
@@ -26,6 +25,7 @@ class GoldenCase:
     type: str = "search"
 
     def to_dict(self) -> dict[str, Any]:
+        """把用例转换为可 JSON 持久化的字典。"""
         return {
             "id": self.id,
             "question": self.question,
@@ -38,6 +38,7 @@ class GoldenCase:
 
 
 def _ref(chat: str, topic: str, index: int) -> str:
+    """按合成语料的命名规约生成确定性引用消息 id。"""
     return f"syn_{chat}_{topic}_{index:02d}"
 
 
@@ -373,20 +374,23 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
 
 
 def load_golden(path: str | Path | None = None) -> list[GoldenCase]:
-    """Load golden cases; ``None`` returns the built-in corpus."""
+    """加载黄金用例；`None` 时返回内置语料。"""
     if path is None:
         return list(GOLDEN_CASES)
+    # 外部文件兼容 `{"cases": [...]}` 的直接列表两种结构。
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(data, dict):
         data = data.get("cases") or []
     if not isinstance(data, list):
         raise ValueError("golden file must contain a cases list")
+    # 仅接受字典项，避免脏数据进入评估流程。
     return [_case_from_dict(item) for item in data if isinstance(item, dict)]
 
 
 def dump_golden(path: str | Path) -> str:
-    """Persist the built-in golden corpus as JSON."""
+    """把内置黄金语料写成可版本化的 JSON 文件。"""
     target = Path(path)
+    # 目录不存在时先创建，保证写入路径始终可用。
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(
@@ -400,6 +404,7 @@ def dump_golden(path: str | Path) -> str:
 
 
 def _case_from_dict(data: dict[str, Any]) -> GoldenCase:
+    """从 JSON 字典还原用例，并兼容旧的键名写法。"""
     return GoldenCase(
         id=str(data.get("id") or data.get("case_id") or ""),
         question=str(data.get("question") or ""),

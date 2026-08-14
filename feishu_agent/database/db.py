@@ -1,3 +1,5 @@
+"""SQLite 数据访问层：群聊、消息、同步状态、索引与摘要的统一读写入口。"""
+
 from __future__ import annotations
 
 import json
@@ -69,10 +71,12 @@ CREATE INDEX IF NOT EXISTS idx_summaries_chat ON summaries(chat_id);
 
 
 def iso_now() -> str:
+    """返回当前时间的秒级 ISO 字符串，带本机时区。"""
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def parse_create_time_ms(value: Any) -> int | None:
+    """把飞书时间字段解析为毫秒时间戳，兼容秒级数字与常见时间字符串。"""
     if value is None:
         return None
     if isinstance(value, int):
@@ -91,16 +95,21 @@ def parse_create_time_ms(value: Any) -> int | None:
 
 
 class Database:
+    """统一 SQLite 数据访问入口，覆盖消息、同步、索引与摘要表。"""
+
     def __init__(self, db_path: str | Path) -> None:
+        """初始化数据库路径，并确保父目录存在。"""
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _conn(self) -> sqlite3.Connection:
+        """打开数据库连接并启用 sqlite3.Row 行映射。"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def init(self) -> None:
+        """执行基础建表并按版本号顺序应用尚未执行的迁移。"""
         conn = self._conn()
         try:
             conn.executescript(SCHEMA)
@@ -117,6 +126,7 @@ class Database:
                 int(row[0])
                 for row in conn.execute("SELECT version FROM schema_migrations")
             }
+            # 按版本号递增执行迁移并写入版本记录，保证幂等。
             for migration in MIGRATIONS:
                 if migration.version in applied:
                     continue
@@ -133,6 +143,7 @@ class Database:
             conn.close()
 
     def upsert_chat(self, chat: dict[str, Any]) -> None:
+        """插入或更新一个群聊基础信息。"""
         conn = self._conn()
         try:
             conn.execute(
@@ -166,6 +177,7 @@ class Database:
             conn.close()
 
     def touch_chat_sync(self, chat_id: str) -> None:
+        """更新群聊的最后同步时间。"""
         conn = self._conn()
         try:
             conn.execute(
@@ -177,6 +189,7 @@ class Database:
             conn.close()
 
     def list_chats(self) -> list[dict[str, Any]]:
+        """按更新时间倒序返回全部本地群聊。"""
         conn = self._conn()
         try:
             rows = conn.execute("SELECT * FROM chats ORDER BY updated_at DESC").fetchall()
@@ -185,6 +198,7 @@ class Database:
             conn.close()
 
     def message_exists(self, message_id: str) -> bool:
+        """判断消息 id 是否已存在于本地库。"""
         conn = self._conn()
         try:
             row = conn.execute(
@@ -195,6 +209,7 @@ class Database:
             conn.close()
 
     def upsert_message(self, msg: dict[str, Any], seen_at: str | None = None) -> dict[str, Any]:
+        """幂等写入一条消息：先归一化，再对比哈希并记录版本变更。"""
         normalized = normalize_message(msg)
         sender = msg.get("sender") or {}
         create_time = msg.get("create_time")
@@ -211,6 +226,7 @@ class Database:
                 (msg.get("message_id") or "",),
             ).fetchone()
             is_new = existing is None
+            # 变更类型决定是否写入 message_versions 审计版本。
             change_kind = (
                 "created"
                 if is_new
@@ -219,6 +235,7 @@ class Database:
             changed = is_new or change_kind != "unchanged"
             version_seq: int | None = None
             if changed:
+                # 版本号按消息自增，保留完整的内容变更历史。
                 version_seq = (
                     1
                     if is_new
@@ -327,6 +344,7 @@ class Database:
             conn.close()
 
     def get_sync_state(self, chat_id: str) -> dict[str, Any] | None:
+        """读取一个群的同步游标与上次同步状态。"""
         conn = self._conn()
         try:
             row = conn.execute(
@@ -345,6 +363,7 @@ class Database:
         error: str | None = None,
         preserve_cursor: bool = False,
     ) -> None:
+        """写入同步状态；preserve_cursor 为 True 时只更新状态不挪动游标。"""
         conn = self._conn()
         try:
             if preserve_cursor:
@@ -397,6 +416,7 @@ class Database:
         limit: int = 100,
         order: str = "asc",
     ) -> list[dict[str, Any]]:
+        """按群、类型、发送者或关键词过滤消息，支持排序与数量上限。"""
         where: list[str] = []
         params: list[Any] = []
         if chat_id:
@@ -426,6 +446,7 @@ class Database:
 
 
     def count_messages(self, chat_id: str) -> int:
+        """统计指定群已有的消息数量。"""
         conn = self._conn()
         try:
             row = conn.execute(
@@ -437,6 +458,7 @@ class Database:
             conn.close()
 
     def delete_chat(self, chat_id: str) -> dict[str, int]:
+        """级联删除一个群的消息、版本、同步状态、摘要与群信息。"""
         conn = self._conn()
         try:
             conn.execute(
@@ -458,6 +480,7 @@ class Database:
             conn.close()
 
     def rebuild_normalization(self) -> dict[str, Any]:
+        """用当前 normalize_version 重算全部消息的标准化文本与哈希。"""
         conn = self._conn()
         try:
             rows = conn.execute(
@@ -511,6 +534,7 @@ class Database:
             conn.close()
 
     def record_sync_run(self, run: dict[str, Any]) -> None:
+        """持久化一轮同步运行统计，便于后续巡检和指标展示。"""
         conn = self._conn()
         try:
             conn.execute(
@@ -543,6 +567,7 @@ class Database:
             conn.close()
 
     def recent_sync_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        """返回最近同步运行记录，并把 errors_json 反序列化回列表。"""
         conn = self._conn()
         try:
             rows = conn.execute(
@@ -564,6 +589,7 @@ class Database:
         message_id: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        """查询消息版本审计记录，可按消息 id 过滤并限制条数。"""
         where = ""
         params: list[Any] = []
         if message_id:
@@ -585,6 +611,7 @@ class Database:
             conn.close()
 
     def metrics(self, limit: int = 10) -> dict[str, Any]:
+        """汇总同步、摘要与 Agent 指标，形成一块可对外展示的系统看板。"""
         conn = self._conn()
         try:
             from feishu_agent.agent.repository import AgentRepository
@@ -673,6 +700,7 @@ class Database:
             conn.close()
 
     def stats(self) -> dict[str, int]:
+        """统计本地库各核心表的数据量与错误数量。"""
         conn = self._conn()
         try:
             chats = conn.execute("SELECT COUNT(*) AS c FROM chats").fetchone()["c"]
@@ -726,6 +754,7 @@ class Database:
 
 
 def _to_int(value: Any) -> int | None:
+    """把任意值安全转换为整数，失败返回 None。"""
     if value is None:
         return None
     try:
@@ -735,6 +764,7 @@ def _to_int(value: Any) -> int | None:
 
 
 def _cursor_value(value: Any) -> Any:
+    """把游标值规范成字符串，None 保持不变。"""
     return None if value is None else str(value)
 
 
@@ -743,6 +773,7 @@ def _message_change_kind(
     msg: dict[str, Any],
     normalized: dict[str, Any],
 ) -> str:
+    """对比旧记录与新消息，识别撤回/恢复/内容更新/元数据更新等变更。"""
     was_deleted = bool(existing["deleted"])
     now_deleted = bool(msg.get("deleted"))
     if was_deleted != now_deleted:
@@ -755,6 +786,7 @@ def _message_change_kind(
 
 
 def _version_content_raw(content: Any) -> str | None:
+    """把结构类型的内容转成可持久化的版本快照字符串。"""
     if content is None:
         return None
     if isinstance(content, (dict, list)):

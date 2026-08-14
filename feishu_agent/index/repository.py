@@ -1,3 +1,5 @@
+"""检索索引仓库：负责 chunk 落库、FTS5/稀疏向量/RRF 混合检索与谱系追踪。"""
+
 from __future__ import annotations
 
 import json
@@ -34,11 +36,13 @@ _HEX_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class IndexRepository:
-    """SQLite-backed derived index: chunks, FTS5, sparse vectors and graph."""
+    """SQLite 派生索引仓库：chunk、FTS5、稀疏向量、知识图谱与运行审计。"""
 
     def __init__(self, db: Database) -> None:
+        # 注入数据库实例；每轮索引的计数在执行时分别初始化。
         self.db = db
 
+    # 返回索引版本、覆盖量、最近运行与新鲜度判断。
     def status(self) -> dict[str, Any]:
         conn = self._connect()
         try:
@@ -86,6 +90,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 返回待索引的群列表，默认剔除外部群并可叠加白名单过滤。
     def list_chats_for_index(
         self,
         *,
@@ -116,6 +121,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 全量重建：清空派生数据后逐群重算 chunk、向量与图谱。
     def rebuild(
         self,
         *,
@@ -171,6 +177,7 @@ class IndexRepository:
             "scope": scope,
         }
 
+    # 增量索引：根据版本游标找出变化群并刷新对应派生数据。
     def incremental(
         self,
         *,
@@ -257,6 +264,7 @@ class IndexRepository:
             "scope": scope,
         }
 
+    # 一致性校验：逐群比对消息覆盖、哈希和派生表计数。
     def consistency(
         self,
         *,
@@ -401,6 +409,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 混合检索：融合 BM25 与稀疏 TF-IDF 的 RRF 排序并返回证据。
     def search(
         self,
         query: str,
@@ -454,6 +463,7 @@ class IndexRepository:
             "results": results,
         }
 
+    # 汇总知识图谱实体、关系边与消息提及的统计。
     def entity_stats(self) -> dict[str, Any]:
         conn = self._connect()
         try:
@@ -491,6 +501,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 按类型/关键词/数量上限列出知识图谱实体。
     def list_entities(
         self,
         *,
@@ -517,6 +528,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 按关键词或实体 id 查询实体、邻居与提及消息。
     def query_graph(
         self,
         entity_keyword: str,
@@ -537,6 +549,7 @@ class IndexRepository:
             "message": "多个实体匹配，请用 entity_id 精确查询",
         }
 
+    # 按精确 entity_id 定位实体并组装图谱视图。
     def _graph_entity_by_id(
         self,
         entity_keyword: str,
@@ -601,6 +614,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 把数据库 chunk 行规范化为检索用字典。
     def _chunk_rows(
         self,
         chat_ids: list[str] | None,
@@ -629,6 +643,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 基于 FTS5 执行 BM25 全文检索，返回命中的 chunk 与消息。
     def _bm25_ranked(
         self,
         tokens: list[str],
@@ -655,6 +670,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 基于稀疏词频向量计算 TF-IDF 相似度并排序候选 chunk。
     def _tfidf_ranked(
         self,
         tokens: list[str],
@@ -713,6 +729,7 @@ class IndexRepository:
         return [chunk_id for _, chunk_id in scored]
 
     @staticmethod
+    # 使用 Reciprocal Rank Fusion 融合多路检索的排序结果。
     def _rrf(
         ranked_lists: list[tuple[str, list[int]]],
     ) -> list[tuple[int, float, list[str]]]:
@@ -730,6 +747,7 @@ class IndexRepository:
             for chunk_id, score in ordered
         ]
 
+    # 读取一个 chunk 包含的源消息。
     def _chunk_messages(self, chunk_id: int) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
@@ -750,6 +768,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 重建单个群：清空旧数据后重新切块并建立向量与图谱。
     def _rebuild_chat(self, chat_id: str, chat_name: str) -> dict[str, int]:
         conn = self._connect()
         try:
@@ -857,6 +876,7 @@ class IndexRepository:
             conn.close()
 
     @staticmethod
+    # 删除一个群关联的 chunk、向量、实体边等派生记录，返回受影响实体。
     def _purge_chat(conn: sqlite3.Connection, chat_id: str) -> set[str]:
         affected = {
             str(row["entity_id"])
@@ -885,6 +905,7 @@ class IndexRepository:
         return affected
 
     @staticmethod
+    # 索引单条消息：抽出实体关系、更新提及并关联到 chunk。
     def _index_message(
         conn: sqlite3.Connection,
         row: dict[str, Any],
@@ -996,6 +1017,7 @@ class IndexRepository:
         }
 
     @staticmethod
+    # 保证实体存在并返回稳定的 entity_id。
     def _ensure_entity(
         conn: sqlite3.Connection,
         eid: str,
@@ -1026,6 +1048,7 @@ class IndexRepository:
         return True
 
     @staticmethod
+    # 重建实体提及计数并清理不再被引用的孤立实体。
     def _refresh_entities(
         conn: sqlite3.Connection,
         entity_ids: set[str],
@@ -1070,6 +1093,7 @@ class IndexRepository:
                 (int(total), int(agg["first_ms"]), int(agg["last_ms"]), now, eid),
             )
 
+    # 根据版本游标筛选需要增量索引的群集合。
     def _changed_chat_ids(self, version_cursor: int | None, chat_ids: list[str]) -> set[str]:
         if version_cursor is None:
             return set(str(chat_id) for chat_id in chat_ids)
@@ -1094,6 +1118,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 返回当前已有派生索引的群 id 集合。
     def _indexed_chat_ids(self) -> set[str]:
         conn = self._connect()
         try:
@@ -1104,6 +1129,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 清空全部派生索引表，包括 FTS5 虚拟表。
     def _clear_derived(self) -> None:
         conn = self._connect()
         try:
@@ -1117,6 +1143,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 持久化一次索引运行的统计、范围与错误明细。
     def _record_run(
         self,
         *,
@@ -1173,6 +1200,7 @@ class IndexRepository:
         finally:
             conn.close()
 
+    # 读取最近一次索引运行并反序列化 JSON 字段。
     def _last_run_decoded(self) -> dict[str, Any] | None:
         conn = self._connect()
         try:
@@ -1184,6 +1212,7 @@ class IndexRepository:
             conn.close()
 
     @staticmethod
+    # 把索引运行行转换为字典并解析 JSON 字段。
     def _decode_run(row: sqlite3.Row) -> dict[str, Any]:
         run = dict(row)
         for key in ("errors_json",):
@@ -1199,6 +1228,7 @@ class IndexRepository:
         return run
 
     @staticmethod
+    # 返回本轮索引运行的零值计数结构。
     def _empty_counts() -> dict[str, int]:
         return {
             "chats_indexed": 0,
@@ -1213,6 +1243,7 @@ class IndexRepository:
         }
 
     @staticmethod
+    # 把单群索引计数合并进本轮总量。
     def _add_counts(
         totals: dict[str, int],
         counts: dict[str, int],
@@ -1228,6 +1259,7 @@ class IndexRepository:
         ):
             totals[key] += int(counts.get(key) or 0)
 
+    # 打开数据库连接并启用行映射与外键约束。
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db.db_path)
         conn.row_factory = sqlite3.Row
@@ -1235,6 +1267,7 @@ class IndexRepository:
         return conn
 
 
+    # 从检索结果行提取展示用摘要文本。
 def _evidence_text(row: dict[str, Any]) -> str:
     text = str(row.get("content_normalized") or "").strip()
     return text[:MAX_EVIDENCE_CHARS]

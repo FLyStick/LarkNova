@@ -1,4 +1,4 @@
-"""Deterministic rule-mode agent: intent selection, tool calls and refusals."""
+"""确定性规则模式 Agent：意图选择、工具调用与拒绝回答。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from feishu_agent.summary.budget import estimate_tokens
 
 @dataclass
 class RuleResult:
-    """Output of one deterministic rule-mode answer."""
+    """一次确定性规则回答的输出：意图、答案、引用与工具调用记录。"""
 
     intent: str
     answer: str
@@ -29,7 +29,7 @@ class RuleResult:
 
 
 class RuleEngine:
-    """Resolve a question to one known intent and answer only with evidence."""
+    """把问题解析为已知意图，并只在本地证据支持下作答。"""
 
     def __init__(self, registry: ToolRegistry, settings: Settings | None = None) -> None:
         self.registry = registry
@@ -46,6 +46,7 @@ class RuleEngine:
         question: str,
         chat_ids: list[str] | None = None,
     ) -> RuleResult:
+        """执行一轮规则问答：先重置状态，再按识别出的意图分发处理。"""
         q = str(question or "").strip()
         self._calls = []
         self._citations = []
@@ -65,6 +66,7 @@ class RuleEngine:
         return self._answer_search(q)
 
     def _answer_time(self, question: str) -> RuleResult:
+        """时间类问题：调用 time_now 工具返回当前服务器时间。"""
         result = self._run("time_now", {})
         now = (result.raw or {}).get("now") or ""
         answer = f"当前时间：{now}" if result.ok and now else "无法获取当前时间。"
@@ -76,6 +78,7 @@ class RuleEngine:
         )
 
     def _answer_summary(self, question: str, intent: str) -> RuleResult:
+        """摘要类问题：逐个群读取结构化摘要，缺失时回退到最近消息。"""
         chats = self._resolve_chats()
         if not chats:
             return self._refuse(intent, "no_chat_scope", "本地库中没有可查询的群聊。")
@@ -109,6 +112,7 @@ class RuleEngine:
         )
 
     def _answer_recent(self, question: str) -> RuleResult:
+        """最近消息类问题：按群倒序拉取本地消息并整理成回答。"""
         chats = self._resolve_chats()
         if not chats:
             return self._refuse("recent", "no_chat_scope", "本地库中没有可查询的群聊。")
@@ -122,6 +126,7 @@ class RuleEngine:
         )
 
     def _answer_graph(self, question: str) -> RuleResult:
+        """图谱类问题：优先查实体，未命中再退化为普通消息检索。"""
         keyword = self._extract_keyword(question, graph=True)
         if not keyword:
             return self._refuse("graph", "no_keyword", "无法从问题中识别要查询的实体。")
@@ -169,6 +174,7 @@ class RuleEngine:
         )
 
     def _answer_search(self, question: str) -> RuleResult:
+        """默认检索路径：先走索引搜索，再降级到直接消息查询与摘要回退。"""
         result = self._run(
             "search",
             {
@@ -219,6 +225,7 @@ class RuleEngine:
         *,
         intent: str,
     ) -> RuleResult | None:
+        """在多个群的最近消息中收集证据，命中时生成回答。"""
         items: list[dict[str, Any]] = []
         for chat_id in chats[: max(1, self._remaining_steps())]:
             result = self._run(
@@ -245,6 +252,7 @@ class RuleEngine:
         question: str,
         chats: list[str],
     ) -> RuleResult | None:
+        """消息检索无结果时，尝试用已有结构化摘要作为兜底回答。"""
         for chat_id in chats[: max(1, self._remaining_steps())]:
             result = self._run("summary", {"chat_id": chat_id})
             if not result.ok:
@@ -270,6 +278,7 @@ class RuleEngine:
         items: list[dict[str, Any]],
         intro: str,
     ) -> RuleResult:
+        """把证据条目渲染成带编号的回答文本，并筛选出实际引用的消息。"""
         selected = items[: self.settings.agent_max_evidence_items]
         if not selected:
             return self._refuse(intent, "no_evidence", "没有可引用的消息依据。")
@@ -292,6 +301,7 @@ class RuleEngine:
         )
 
     def _item_lines(self, items: list[dict[str, Any]]) -> list[str]:
+        """把证据条目格式化为「时间、发送者、摘录」的多行文本。"""
         lines: list[str] = []
         for idx, item in enumerate(items[: self.settings.agent_max_evidence_items], 1):
             when = str(item.get("create_time") or "未知时间")
@@ -310,6 +320,7 @@ class RuleEngine:
         refusal_reason: str = "",
         citations: list[Citation] | None = None,
     ) -> RuleResult:
+        """统一组装返回值：截断答案、估算 token 并固化本次工具调用记录。"""
         answer = str(answer or "").strip()[: self.settings.agent_max_answer_chars]
         tokens = estimate_tokens(question + "\n" + answer)
         return RuleResult(
@@ -324,6 +335,7 @@ class RuleEngine:
         )
 
     def _refuse(self, intent: str, reason: str, detail: str) -> RuleResult:
+        """生成拒绝回答结果，reason 用于后续统计和审计。"""
         return self._finalize(
             intent=intent,
             question="",
@@ -334,6 +346,7 @@ class RuleEngine:
         )
 
     def _run(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        """执行一次受限工具调用，并记录耗时、状态和证据。"""
         if self._steps >= self._max_steps:
             return ToolResult(
                 False,
@@ -362,6 +375,7 @@ class RuleEngine:
         return result
 
     def _collect_evidence(self, result: ToolResult) -> None:
+        """把工具返回的新消息追加为引用，跨工具执行按消息 id 去重。"""
         for item in result.items:
             message_id = str(item.get("message_id") or "")
             if not message_id or message_id in self._seen_message_ids:
@@ -381,6 +395,7 @@ class RuleEngine:
             )
 
     def _resolve_chats(self) -> list[str]:
+        """确定本次查询的群范围：显式传入优先，否则从本地群列表解析。"""
         if self._resolved_chat_ids:
             return list(self._resolved_chat_ids)
         result = self._run("chat_list", {})
@@ -394,10 +409,12 @@ class RuleEngine:
         return list(self._resolved_chat_ids)
 
     def _remaining_steps(self) -> int:
+        """返回剩余可用工具调用步数，保证不超过全局步数上限。"""
         return max(1, self._max_steps - self._steps)
 
     @staticmethod
     def _detect_intent(question: str) -> str:
+        """基于关键词匹配识别时间/摘要/图谱/最近/检索五类意图。"""
         text = str(question or "").strip()
         if any(token in text for token in ("现在几点", "几点了", "当前时间", "时间是多少")):
             return "time"
@@ -410,6 +427,7 @@ class RuleEngine:
         return "search"
 
     def _extract_keyword(self, question: str, *, graph: bool) -> str:
+        """从问题中抽取检索关键词：优先引号内内容，再剔除疑问词。"""
         text = str(question or "").strip()
         quoted = re.search(r"[“\"「『]([^”\"」』]+)[”\"」』]?", text)
         if quoted:
@@ -445,6 +463,7 @@ class RuleEngine:
 
 
 def _chat_name_from_items(items: list[dict[str, Any]]) -> str:
+    """从证据条目中取第一个非空群名。"""
     for item in items:
         name = str(item.get("chat_name") or "")
         if name:
@@ -453,4 +472,5 @@ def _chat_name_from_items(items: list[dict[str, Any]]) -> str:
 
 
 def _now_iso() -> str:
+    """返回带时区的毫秒精度 ISO 时间字符串。"""
     return datetime.now().astimezone().isoformat(timespec="milliseconds")

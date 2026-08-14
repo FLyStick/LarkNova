@@ -1,4 +1,4 @@
-"""Deterministic rule summarizer used as the reproducible M3 baseline."""
+"""确定性规则摘要器，作为易复现的 M3 基线实现。"""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ _ENTITY_TYPES = {
 
 
 class RuleSummarizer:
-    """Extract conclusion/evidence/todo/key people/dates from chat chunks."""
+    """从聊天块中规则化抽取结论、依据、待办、关键人与日期。"""
 
     mode = "rule"
 
@@ -68,7 +68,9 @@ class RuleSummarizer:
         chunks: list[dict[str, Any]],
         now_iso: str,
     ) -> SummaryResult:
+        """一次调用完成多字段抽取，并返回带来源与统计的摘要结果。"""
         started = time.perf_counter()
+        # 先展平并去重消息，保证来源列表与摘要内容口径一致。
         messages = self._flatten_messages(chunks)
         source_message_ids = list(
             dict.fromkeys(str(msg["message_id"]) for msg in messages)
@@ -76,6 +78,7 @@ class RuleSummarizer:
         source_chunk_ids = sorted(
             {int(chunk["id"]) for chunk in chunks if chunk.get("id") is not None}
         )
+        # 无消息的群不生成占位摘要，直接返回空结果。
         if not messages:
             return SummaryResult(
                 conclusion="",
@@ -124,6 +127,7 @@ class RuleSummarizer:
 
     @staticmethod
     def _flatten_messages(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """按 chunk 顺序展平消息并按 message_id 去重。"""
         messages: list[dict[str, Any]] = []
         seen: set[str] = set()
         for chunk in chunks:
@@ -137,6 +141,7 @@ class RuleSummarizer:
 
     @staticmethod
     def _pick_conclusion(messages: list[dict[str, Any]]) -> str:
+        """优先挑选含结论信号词的短句，最多合并两句作为结论。"""
         candidates: list[tuple[int, int, str, int]] = []
         for index, msg in enumerate(messages):
             content = str(msg.get("content_normalized") or "").strip()
@@ -144,6 +149,7 @@ class RuleSummarizer:
                 sentence = sentence.strip().strip("。！？!?；;")
                 if len(sentence) < 8:
                     continue
+                # 含信号词的句子优先，其次考虑更长的内容与更靠后的位置。
                 signal = any(
                     keyword in sentence for keyword in _SIGNAL_KEYWORDS
                 )
@@ -151,6 +157,7 @@ class RuleSummarizer:
                     (2 if signal else 1, len(sentence), -index, sentence)
                 )
         if not candidates:
+            # 完全没有信号句时，退化为按长度挑选较长消息作为候选结论。
             candidates = [
                 (1, len(content), -index, content)
                 for index, msg in enumerate(messages)
@@ -161,6 +168,7 @@ class RuleSummarizer:
         picked = [item[3] for item in candidates[:2]]
         if not picked:
             return ""
+        # 用 dict.fromkeys 去重，避免两句重复内容影响可读性。
         conclusion = "；".join(dict.fromkeys(picked))
         if len(conclusion) > 220:
             conclusion = conclusion[:220] + "..."
@@ -168,6 +176,7 @@ class RuleSummarizer:
 
     @staticmethod
     def _evidence(context_lines: list[str]) -> list[str]:
+        """从构建好的上下文中选取一定数量不重复的长行作为依据。"""
         seen: set[str] = set()
         result: list[str] = []
         for line in context_lines:
@@ -181,6 +190,7 @@ class RuleSummarizer:
 
     @staticmethod
     def _todo_lines(messages: list[dict[str, Any]]) -> list[str]:
+        """筛选含待办关键词的消息，并附加时间与发送者前缀。"""
         result: list[str] = []
         seen: set[str] = set()
         for msg in messages:
@@ -203,6 +213,7 @@ class RuleSummarizer:
 
     @staticmethod
     def _key_people(messages: list[dict[str, Any]]) -> list[str]:
+        """收集非系统发送者姓名，保持首次出现顺序并去重。"""
         return list(
             dict.fromkeys(
                 str(msg.get("sender_name") or "").strip()
@@ -214,6 +225,7 @@ class RuleSummarizer:
 
     @staticmethod
     def _key_dates(messages: list[dict[str, Any]]) -> list[str]:
+        """从正文和发送时间中抽取日期，最多保留 10 个。"""
         result: list[str] = []
         for msg in messages:
             content = str(msg.get("content_normalized") or "")
@@ -234,6 +246,7 @@ class RuleSummarizer:
         chat_name: str,
         chat_id: str,
     ) -> list[str]:
+        """复用知识图谱实体抽取，过滤类型白名单与重复项。"""
         result: list[str] = []
         seen: set[str] = set()
         for msg in messages:

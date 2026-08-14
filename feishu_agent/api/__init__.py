@@ -1,1 +1,1 @@
-"""HTTP API for querying synced data."""
+"""HTTP API：对外提供同步数据查询接口。"""

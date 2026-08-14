@@ -1,1 +1,1 @@
-"""Message sync orchestration."""
+"""消息同步编排：全量/增量同步与数据边界控制。"""

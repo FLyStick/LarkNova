@@ -1,3 +1,5 @@
+"""运行时配置：统一从环境变量和项目根目录 .env 文件加载。"""
+
 from __future__ import annotations
 
 import os
@@ -6,7 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def _load_dotenv(path: Path) -> None:
-    """Load KEY=VALUE pairs without overriding variables already in env."""
+    """加载 .env 文件中的 KEY=VALUE 配置，不覆盖已存在的环境变量。"""
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8-sig")
@@ -28,11 +30,12 @@ _load_dotenv(PROJECT_ROOT / ".env")
 
 
 def _parse_bool(value: str) -> bool:
+    """把常见的布尔字符串（1/true/yes/on）解析为 True。"""
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _split_list(value: str) -> list[str]:
-    """Split comma/semicolon-separated env values, dropping empty entries."""
+    """按逗号或分号拆分环境变量列表，并丢弃空项。"""
     return [
         part.strip()
         for part in value.replace(";", ",").split(",")
@@ -41,7 +44,7 @@ def _split_list(value: str) -> list[str]:
 
 
 class Settings:
-    """Runtime settings loaded from environment variables."""
+    """运行配置集合：覆盖飞书同步、摘要、Agent、API 与数据边界等配置。"""
 
     def __init__(self) -> None:
         self.db_path = Path(

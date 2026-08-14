@@ -1,3 +1,3 @@
-"""Feishu message sync agent (minimal MVP)."""
+"""飞书消息同步 Agent 基础包。"""
 
 __version__ = "0.1.0"

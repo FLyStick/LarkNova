@@ -1,1 +1,1 @@
-"""SQLite storage for chats, messages and sync state."""
+"""SQLite 存储层：群聊、消息与同步状态的持久化。"""

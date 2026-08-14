@@ -1,4 +1,4 @@
-"""Persistent M5 resume metrics report."""
+"""M5 简历评估指标报告的写入、读取与文本格式化。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ DEFAULT_REPORT_PATH = PROJECT_ROOT / "data" / "reports" / "resume_metrics.json"
 
 
 def write_report(report: dict[str, Any], path: str | Path | None = None) -> str:
+    """把评估报告写成 UTF-8 JSON 文件，并返回目标路径。"""
     target = _report_path(path)
+    # 报告目录可能不存在，先创建再落盘。
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
@@ -22,6 +24,7 @@ def write_report(report: dict[str, Any], path: str | Path | None = None) -> str:
 
 
 def load_report(path: str | Path | None = None) -> dict[str, Any] | None:
+    """读取评估报告；文件不存在时返回 None。"""
     target = _report_path(path)
     if not target.exists():
         return None
@@ -29,6 +32,7 @@ def load_report(path: str | Path | None = None) -> dict[str, Any] | None:
 
 
 def format_report(report: dict[str, Any]) -> str:
+    """把评估报告格式化为便于终端阅读的文本。"""
     metrics = report.get("metrics") or {}
     mode = str(report.get("mode") or "-")
     run_at = str(report.get("run_at") or "-")
@@ -39,6 +43,7 @@ def format_report(report: dict[str, Any]) -> str:
         f"M5 评估报告（mode={mode}, run_at={run_at}）",
         f"总准确率：{accuracy:.2%}（{passed}/{total}）",
     ]
+    # 只有出现拒答类用例时才打印拒答准确率。
     if metrics.get("refusal_total"):
         lines.append(
             "拒答准确率：{:.2%}（{}/{})".format(
@@ -71,6 +76,7 @@ def format_report(report: dict[str, Any]) -> str:
         )
     by_type = metrics.get("by_type") or {}
     if by_type:
+        # 按用例类型排序输出，便于横向比较不同检索模式。
         lines.append("按类型：")
         for case_type, bucket in sorted(by_type.items()):
             lines.append(
@@ -83,6 +89,7 @@ def format_report(report: dict[str, Any]) -> str:
             )
     failures = metrics.get("failures") or []
     if failures:
+        # 失败样例只展示前 10 个，避免终端输出过长。
         lines.append(f"失败样例 {len(failures)} 个：")
         for failure in failures[:10]:
             lines.append(
@@ -96,4 +103,5 @@ def format_report(report: dict[str, Any]) -> str:
 
 
 def _report_path(path: str | Path | None) -> Path:
+    """返回默认或用户指定的报告路径。"""
     return Path(path) if path else DEFAULT_REPORT_PATH

@@ -1,1 +1,1 @@
-"""Feishu platform access layer."""
+"""飞书开放平台访问层。"""

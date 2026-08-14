@@ -1,3 +1,5 @@
+"""环境自检：诊断飞书身份可见性、读消息权限与数据边界配置。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -18,7 +20,7 @@ def run_doctor(
     allow_external: bool = False,
     max_read_checks: int = 1,
 ) -> dict[str, Any]:
-    """Check identity visibility, bot read permission and data boundary."""
+    """执行一轮环境体检，返回平台/权限/边界问题与可执行的修复建议。"""
     who = identity or client.identity
     result: dict[str, Any] = {
         "identity": who,
@@ -134,6 +136,7 @@ def run_doctor(
 
 
 def format_doctor(result: dict[str, Any]) -> str:
+    """把体检结果格式化成适合 CLI 展示的多行文本。"""
     lines = [
         f"identity: {result['identity']}",
         "boundary: whitelist={} allow_external={}".format(

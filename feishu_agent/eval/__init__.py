@@ -1,4 +1,4 @@
-"""M5 evaluation harness over the synthetic corpus."""
+"""M5 评估模块：基于合成语料的黄金用例回放与指标打分。"""
 
 from feishu_agent.eval.golden import (
     GOLDEN_CASES,

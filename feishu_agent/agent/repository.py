@@ -1,4 +1,4 @@
-"""Persistent storage for agent runs, replayable traces and latency stats."""
+"""Agent 运行记录持久化：可回放 trace、延迟统计与应用状态。"""
 
 from __future__ import annotations
 
@@ -12,12 +12,13 @@ from feishu_agent.agent.protocol import AgentStep, AgentTrace, Citation
 
 
 class AgentRepository:
-    """SQLite repository for M4 agent runs and trace steps."""
+    """SQLite 仓库：负责 Agent 运行记录与逐步骤 trace 的持久化。"""
 
     def __init__(self, db: Any) -> None:
         self.db = db
 
     def record(self, trace: AgentTrace) -> None:
+        """写入一次运行及其全部步骤，运行主表与步骤表在同一事务内提交。"""
         conn = self._connect()
         try:
             cursor = conn.execute(
@@ -75,9 +76,11 @@ class AgentRepository:
             conn.close()
 
     def record_from_dict(self, data: dict[str, Any]) -> None:
+        """从字典形式的 trace 恢复对象后写入数据库。"""
         self.record(AgentTrace.from_dict(data))
 
     def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        """按时间倒序列出最近运行记录，默认不返回详细步骤以控制体积。"""
         conn = self._connect()
         try:
             rows = conn.execute(
@@ -96,6 +99,7 @@ class AgentRepository:
             conn.close()
 
     def get(self, run_id: str) -> dict[str, Any] | None:
+        """按 trace_id 或数据库自增 id 查询单次运行及其完整步骤。"""
         conn = self._connect()
         try:
             row = conn.execute(
@@ -137,6 +141,7 @@ class AgentRepository:
             conn.close()
 
     def stats(self) -> dict[str, Any]:
+        """统计运行总量、状态/模式分布、token、引用数和延迟分位数。"""
         conn = self._connect()
         try:
             total = int(
@@ -201,6 +206,7 @@ class AgentRepository:
             conn.close()
 
     def _decode_run(self, row: sqlite3.Row) -> dict[str, Any]:
+        """把数据库行转成运行字典，并反序列化 JSON 字段。"""
         run = dict(row)
         run["chat_ids"] = self._decode_json(run.pop("chat_ids_json")) or []
         run["citations"] = [
@@ -216,6 +222,7 @@ class AgentRepository:
 
     @staticmethod
     def _decode_json(raw: str | None) -> Any:
+        """安全解析 JSON 字段，坏数据返回 None 而不是中断查询。"""
         if not raw:
             return None
         try:
@@ -224,6 +231,7 @@ class AgentRepository:
             return None
 
     def _connect(self) -> sqlite3.Connection:
+        """打开数据库连接并启用行字典与外键约束。"""
         conn = sqlite3.connect(self.db.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
@@ -231,6 +239,7 @@ class AgentRepository:
 
 
 def _percentile(values: list[int], percentile: float) -> int:
+    """线性插值计算延迟分位数，空列表返回 0。"""
     if not values:
         return 0
     values = sorted(values)

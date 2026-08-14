@@ -1,4 +1,4 @@
-"""M3 AI summary: deterministic baseline and optional LLM upgrade."""
+"""M3 摘要模块：确定性规则基线加可选 LLM 升级。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Persistent summary repository with rebuild/incremental/consistency checks."""
+"""摘要持久化仓库：支持全量重建、增量补充与一致性校验。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from feishu_agent.summary.factory import make_summarizer
 
 
 class SummaryRepository:
-    """Store one rolling structured summary per chat over indexed messages."""
+    """按群持久化滚动摘要，支持全量重建、增量补充与一致性校验。"""
 
     def __init__(self, db: Database, settings: Settings | None = None) -> None:
         self.db = db
@@ -29,6 +29,7 @@ class SummaryRepository:
         include_external: bool = False,
         mode: str = "rule",
     ) -> dict[str, Any]:
+        # 全量重建：按选定群重新加载索引并替换旧摘要。
         selected = self._list_chats(
             chat_ids=chat_ids,
             allowed_chat_ids=allowed_chat_ids,
@@ -87,6 +88,7 @@ class SummaryRepository:
             "scope": scope,
         }
 
+    # 增量摘要：索引缺失或群为空时快速返回，否则按增量原因逐群补齐。
     def incremental(
         self,
         *,
@@ -205,6 +207,7 @@ class SummaryRepository:
             "scope": scope,
         }
 
+    # 按筛选条件分页查询摘要并解码为 JSON 结构。
     def list_summaries(
         self,
         *,
@@ -238,6 +241,7 @@ class SummaryRepository:
         finally:
             conn.close()
 
+    # 查询单个群最新或指定周期的摘要。
     def get(
         self,
         chat_id: str,
@@ -268,6 +272,7 @@ class SummaryRepository:
         finally:
             conn.close()
 
+    # 把摘要来源与当前索引逐群比对，返回一致性结论与缺失消息。
     def consistency(
         self,
         *,
@@ -356,6 +361,7 @@ class SummaryRepository:
         finally:
             conn.close()
 
+    # 汇总摘要数量、覆盖规模与最近运行状态。
     def status(self) -> dict[str, Any]:
         conn = self._connect()
         try:
@@ -413,6 +419,7 @@ class SummaryRepository:
         finally:
             conn.close()
 
+    # 判断群是否需要重写摘要，并给出 no_summary/no_changes 等决策原因。
     def _incremental_decision(
         self,
         chat_id: str,
@@ -445,6 +452,7 @@ class SummaryRepository:
         counts = self._summarize_chat(chat_id, chat_name, mode, replace=True)
         return {"reason": "new_messages", "counts": counts}
 
+    # 加载一个群的聊天上下文，生成摘要并插入或替换对应记录。
     def _summarize_chat(
         self,
         chat_id: str,
@@ -570,6 +578,7 @@ class SummaryRepository:
         finally:
             conn.close()
 
+    # 从 chunks 与 messages 组装群聊上下文、周期和来源消息。
     def _load_chat(
         self,
         conn: sqlite3.Connection,
@@ -658,6 +667,7 @@ class SummaryRepository:
             "source_message_hash": self._source_hash(messages),
         }
 
+    # 读取单个群最新摘要行并解码。
     def _latest_summary_row(
         self,
         conn: sqlite3.Connection,
@@ -674,6 +684,7 @@ class SummaryRepository:
         return self._decode_summary(row) if row else None
 
     @staticmethod
+    # 按消息 id 与正文生成源哈希，用于检测内容是否变化。
     def _source_hash(messages: list[dict[str, Any]]) -> str:
         items = sorted(
             (
@@ -686,6 +697,7 @@ class SummaryRepository:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
+    # 把摘要行内以 JSON 字符串存储的字段解码为 Python 对象。
     def _decode_summary(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         out = dict(row)
         for raw_key, target in (
@@ -704,6 +716,7 @@ class SummaryRepository:
                 out.pop(raw_key, None)
         return out
 
+    # 按外部群开关与指定群 id 过滤可处理的群列表。
     def _list_chats(
         self,
         *,
@@ -736,6 +749,7 @@ class SummaryRepository:
         finally:
             conn.close()
 
+    # 记录一次摘要运行审计，返回自增 run_id。
     def _record_run(
         self,
         *,
@@ -781,6 +795,7 @@ class SummaryRepository:
         finally:
             conn.close()
 
+    # 读取并解码最近一次摘要运行记录。
     def _last_run_decoded(self) -> dict[str, Any] | None:
         conn = self._connect()
         try:
@@ -792,6 +807,7 @@ class SummaryRepository:
             conn.close()
 
     @staticmethod
+    # 解码运行记录中的 JSON 字段，便于上层直接使用。
     def _decode_run(row: sqlite3.Row) -> dict[str, Any]:
         run = dict(row)
         for key in ("errors_json",):
@@ -807,6 +823,7 @@ class SummaryRepository:
         return run
 
     @staticmethod
+    # 初始化一次摘要运行的汇总计数。
     def _empty_totals() -> dict[str, int]:
         return {
             "chats_checked": 0,
@@ -819,6 +836,7 @@ class SummaryRepository:
         }
 
     @staticmethod
+    # 把单群统计累加进整体运行汇总。
     def _add_counts(
         totals: dict[str, int],
         counts: dict[str, int],
@@ -830,6 +848,7 @@ class SummaryRepository:
         if counts.get("upserted"):
             totals["chats_summarized"] += 1
 
+    # 打开带外键约束与 Row 行工厂的数据库连接。
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db.db_path)
         conn.row_factory = sqlite3.Row

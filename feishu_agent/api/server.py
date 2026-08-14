@@ -1,3 +1,5 @@
+"""HTTP API 服务：用标准库实现同步数据查询、Agent 问答与健康检查接口。"""
+
 from __future__ import annotations
 
 import json
@@ -16,11 +18,13 @@ from feishu_agent.sync.runner import SyncRunner
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:
+    """读取查询参数列表中的第一个值，没有时返回 None。"""
     values = query.get(key)
     return values[0] if values else None
 
 
 def _first_int(query: dict[str, list[str]], key: str, default: int) -> int:
+    """读取整数查询参数，缺失或非法时回退默认值。"""
     try:
         return int(_first(query, key) or default)
     except (TypeError, ValueError):
@@ -28,11 +32,15 @@ def _first_int(query: dict[str, list[str]], key: str, default: int) -> int:
 
 
 class ApiHandler(BaseHTTPRequestHandler):
+    """HTTP 请求处理器：按路由分发查询、重建、同步和 Agent 问答请求。"""
+
     server_version = "FeishuAgent/0.1"
 
     def do_GET(self) -> None:
+        """处理 GET 请求：健康检查、数据查询、检索、摘要与 Agent 运行查询。"""
         parsed = urllib.parse.urlsplit(self.path)
         route = parsed.path
+        # Agent 相关接口统一做鉴权和限流，其余只读接口直接开放。
         if route.startswith("/api/agent/"):
             if not self._agent_authorized():
                 self._send_json({"ok": False, "error": "unauthorized"}, status=401)
@@ -163,8 +171,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
     def do_POST(self) -> None:
+        """处理 POST 请求：触发同步、重建/增量索引、重建/增量摘要与 Agent 问答。"""
         parsed = urllib.parse.urlsplit(self.path)
         request = self._read_json_body()
+        # Agent 接口同样先通过鉴权和限流检查。
         if parsed.path.startswith("/api/agent/"):
             if not self._agent_authorized():
                 self._send_json({"ok": False, "error": "unauthorized"}, status=401)
@@ -238,6 +248,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
     def _read_json_body(self) -> dict[str, Any]:
+        """读取并解析 JSON 请求体，非法 JSON 视为空对象。"""
         raw = b""
         length = int(self.headers.get("Content-Length") or 0)
         if length > 0:
@@ -249,6 +260,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         return parsed if isinstance(parsed, dict) else {}
 
     def _query_messages(self, raw_query: str) -> list[dict[str, Any]]:
+        """解析消息查询参数并调用数据库查询，默认按时间正序返回。"""
         query = urllib.parse.parse_qs(raw_query)
         db = self._new_db()
         return db.query_messages(
@@ -261,21 +273,25 @@ class ApiHandler(BaseHTTPRequestHandler):
         )
 
     def _new_db(self):
+        """从服务器工厂创建新的数据库实例。"""
         return self.server.db_factory()
 
     def _new_index(self) -> IndexRepository:
+        """创建索引仓库，优先使用服务器注入的工厂。"""
         factory = getattr(self.server, "index_factory", None)
         if factory is not None:
             return factory()
         return IndexRepository(self._new_db())
 
     def _new_summary(self) -> SummaryRepository:
+        """创建摘要仓库，优先使用服务器注入的工厂。"""
         factory = getattr(self.server, "summary_factory", None)
         if factory is not None:
             return factory()
         return SummaryRepository(self._new_db())
 
     def _agent_authorized(self) -> bool:
+        """校验 Agent 接口的 Bearer Token 或 X-API-Token；未配置则放行。"""
         token = str(getattr(self.server, "api_token", "") or "")
         if not token:
             return True
@@ -285,6 +301,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         return str(self.headers.get("X-API-Token") or "").strip() == token
 
     def _rate_limited(self) -> bool:
+        """基于滑动窗口做每分钟限流，超过上限返回 True。"""
         per_minute = int(getattr(self.server, "rate_limit_per_min", 0) or 0)
         if per_minute <= 0:
             return False
@@ -299,6 +316,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         return False
 
     def _send_json(self, obj: dict[str, Any], status: int = 200) -> None:
+        """把字典序列化为 UTF-8 JSON 响应并写出。"""
         body = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -307,10 +325,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        """静默访问日志，需要排查时可取消注释恢复默认输出。"""
         # Keep the MVP console quiet; uncomment for debugging.
-        pass
+        # 保留原注释以免影响默认行为。
+        return None
 
 class FeishuAgentServer(ThreadingHTTPServer):
+    """HTTP 服务容器：持有同步器、数据库/索引/摘要工厂及鉴权限流状态。"""
+
     daemon_threads = True
 
     def __init__(
@@ -324,6 +346,7 @@ class FeishuAgentServer(ThreadingHTTPServer):
         api_token="",
         rate_limit_per_min=0,
     ) -> None:
+        """初始化服务依赖，并挂载各存储层的工厂函数供请求处理器使用。"""
         self.runner = runner
         self.db_factory = db_factory
         self.index_factory = index_factory
@@ -337,6 +360,7 @@ class FeishuAgentServer(ThreadingHTTPServer):
 
 
 def _chat_ids(request: dict[str, Any]) -> list[str] | None:
+    """从请求体中提取群 id 列表并过滤空值。"""
     value = request.get("chat_ids")
     if not isinstance(value, list):
         return None
@@ -353,6 +377,7 @@ def create_server(
     api_token="",
     rate_limit_per_min=0,
 ) -> FeishuAgentServer:
+    """创建并返回 FeishuAgentServer，统一装配依赖与防护参数。"""
     return FeishuAgentServer(
         addr,
         runner,

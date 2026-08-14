@@ -1,3 +1,5 @@
+"""同步编排器：支持全量/增量同步、身份切换、边界过滤与单群失败隔离。"""
+
 from __future__ import annotations
 
 import threading
@@ -15,7 +17,7 @@ def boundary_reason(
     allowed_chat_ids: set[str] | None,
     allow_external: bool,
 ) -> str | None:
-    """Return a skip reason when a chat must not enter the local database."""
+    """判断群聊是否应入库；返回 None 表示允许，否则返回跳过原因。"""
     if allowed_chat_ids is not None and chat_id not in allowed_chat_ids:
         return "not_in_whitelist"
     if not allow_external and external:
@@ -24,6 +26,7 @@ def boundary_reason(
 
 
 def to_start_iso(value: str) -> str:
+    """把增量同步的游标时间规范成带时区的 ISO 格式，缺省按东八区处理。"""
     text = value.strip().replace(" ", "T")
     try:
         parsed = datetime.fromisoformat(text)
@@ -35,6 +38,8 @@ def to_start_iso(value: str) -> str:
 
 
 class SyncRunner:
+    """同步执行器：统一调度群聊拉取、消息 upsert、增量索引与摘要。"""
+
     def __init__(
         self,
         client: FeishuClient,
@@ -44,6 +49,7 @@ class SyncRunner:
         allow_external: bool = False,
         summary_factory=None,
     ) -> None:
+        """初始化飞书客户端、数据库、身份与数据边界配置。"""
         self.client = client
         self.db = db
         self.identity = identity
@@ -57,6 +63,8 @@ class SyncRunner:
         chat_ids: list[str] | None = None,
         full: bool = False,
     ) -> dict[str, Any]:
+        """同步全部可见群：先拉群列表，再逐群同步并汇总统计。"""
+        # 加锁保证同一时间只跑一轮同步，避免并发写库。
         with self._sync_lock:
             started = datetime.now().astimezone()
             result: dict[str, Any] = {
@@ -82,6 +90,7 @@ class SyncRunner:
             try:
                 chats = self.client.list_chats(identity=self.identity)
             except Exception as exc:
+                # 群列表阶段失败时仍记录运行，便于通过同步历史排查。
                 result["chats_failed"] = 1
                 result["errors"].append(
                     {"chat_id": None, "error": str(exc), "stage": "chat_list"}
@@ -121,7 +130,7 @@ class SyncRunner:
                     result["messages_updated"] += counts.get("updated", 0)
                     result["messages_deleted"] += counts.get("deleted", 0)
                     result["messages_restored"] += counts.get("restored", 0)
-                except Exception as exc:  # keep one bad chat from blocking the rest
+                except Exception as exc:  # 单群失败仅记录错误，不阻断其余群同步
                     message = str(exc)
                     result["errors"].append({"chat_id": chat_id, "error": message})
                     self.db.set_sync_state(
@@ -138,7 +147,7 @@ class SyncRunner:
             return result
 
     def _incremental_index(self, chat_ids: list[str] | None) -> dict[str, Any]:
-        """Refresh the derived index after sync without blocking sync failures."""
+        """同步后刷新派生索引；失败只记录结果，不阻断同步主流程。"""
         try:
             return IndexRepository(self.db).incremental(
                 chat_ids=chat_ids,
@@ -148,7 +157,7 @@ class SyncRunner:
             return {"mode": "incremental", "built": False, "error": str(exc)}
 
     def _incremental_summary(self, chat_ids: list[str] | None) -> dict[str, Any] | None:
-        """Refresh summaries after indexing without blocking sync failures."""
+        """同步后刷新摘要；未配置摘要工厂时跳过，失败不阻断主流程。"""
         if self.summary_factory is None:
             return None
         try:
@@ -160,9 +169,11 @@ class SyncRunner:
             return {"mode": "incremental", "built": False, "error": str(exc)}
 
     def sync_chat(self, chat_id: str, full: bool = False) -> dict[str, Any]:
+        """同步单个群：增量时从游标开始拉取，全量时从最早消息开始。"""
         started = datetime.now().astimezone()
         state = self.db.get_sync_state(chat_id)
         start = None
+        # 增量模式使用上次同步到的最后消息时间作为拉取起点。
         if not full and state and state.get("last_message_time"):
             start = to_start_iso(state["last_message_time"])
 
@@ -186,6 +197,7 @@ class SyncRunner:
             "unchanged": 0,
         }
         for msg in valid:
+            # 逐条 upsert：借助数据库返回的变更类型区分新增/更新/撤回/恢复。
             outcome = self.db.upsert_message(msg, iso_now())
             kind = outcome.get("change_kind")
             if outcome.get("status") == "created":
@@ -200,6 +212,7 @@ class SyncRunner:
                 counts["unchanged"] += 1
 
         if valid:
+            # 用「最后消息时间 + 消息位置」作为下一个增量游标，保证顺序稳定。
             last = max(
                 valid,
                 key=lambda m: (
@@ -215,6 +228,7 @@ class SyncRunner:
                 error=None,
             )
         else:
+            # 没有有效消息时保留旧游标，避免重复全量拉取。
             self.db.set_sync_state(
                 chat_id, status="ok", error=None, preserve_cursor=True
             )

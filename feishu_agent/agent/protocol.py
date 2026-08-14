@@ -1,4 +1,4 @@
-"""Shared data types for the M4 agent harness."""
+"""M4 Agent 执行器的共享数据类型、trace 结构与异常定义。"""
 
 from __future__ import annotations
 
@@ -7,24 +7,24 @@ from typing import Any
 
 
 class AgentError(RuntimeError):
-    """Base error for the agent layer."""
+    """Agent 层的基础异常。"""
 
 
 class AgentConfigError(AgentError):
-    """Raised when an LLM-backed mode is used without configuration."""
+    """LLM 模式缺少必要配置时抛出。"""
 
 
 class AgentGenError(AgentError):
-    """Raised when LLM output cannot be parsed or tool execution fails."""
+    """LLM 输出无法解析或工具执行失败时抛出。"""
 
 
 class AgentGuardError(AgentError):
-    """Raised when a safety guard blocks a request."""
+    """安全护栏拦截请求时抛出。"""
 
 
 @dataclass
 class Citation:
-    """One traceable reference to a source message or summary."""
+    """一条可溯源的引用：指向具体的来源消息或摘要。"""
 
     message_id: str = ""
     chat_id: str = ""
@@ -36,6 +36,7 @@ class Citation:
     rank: int = 1
 
     def to_dict(self) -> dict[str, Any]:
+        """序列化为普通字典，便于保存到 trace JSON。"""
         return {
             "message_id": self.message_id,
             "chat_id": self.chat_id,
@@ -49,6 +50,7 @@ class Citation:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Citation":
+        """从字典安全恢复引用对象，缺失字段自动使用默认值。"""
         return cls(
             message_id=str(data.get("message_id") or ""),
             chat_id=str(data.get("chat_id") or ""),
@@ -63,7 +65,7 @@ class Citation:
 
 @dataclass
 class ToolCall:
-    """A single tool invocation recorded inside a trace."""
+    """trace 中记录的一次工具调用。"""
 
     name: str
     arguments: dict[str, Any]
@@ -74,6 +76,7 @@ class ToolCall:
     started_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """序列化为普通字典，便于保存到 trace JSON。"""
         return {
             "name": self.name,
             "arguments": self.arguments,
@@ -86,6 +89,7 @@ class ToolCall:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ToolCall":
+        """从字典恢复工具调用记录。"""
         return cls(
             name=str(data.get("name") or ""),
             arguments=data.get("arguments") or {},
@@ -99,7 +103,7 @@ class ToolCall:
 
 @dataclass
 class AgentStep:
-    """One replayable event in an agent trace."""
+    """Agent trace 中一个可回放的事件节点。"""
 
     seq: int
     kind: str
@@ -112,6 +116,7 @@ class AgentStep:
     started_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """序列化为普通字典，便于保存到 trace JSON。"""
         return {
             "seq": self.seq,
             "kind": self.kind,
@@ -126,6 +131,7 @@ class AgentStep:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentStep":
+        """从字典恢复步骤记录。"""
         return cls(
             seq=int(data.get("seq") or 0),
             kind=str(data.get("kind") or ""),
@@ -141,7 +147,7 @@ class AgentStep:
 
 @dataclass
 class AgentTrace:
-    """Full result of one ask() call, persisted for replay."""
+    """一次 ask() 调用的完整结果，持久化后可用于回放与审计。"""
 
     trace_id: str
     question: str
@@ -159,6 +165,7 @@ class AgentTrace:
     finished_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """序列化为普通字典，包含引用和全部步骤。"""
         return {
             "trace_id": self.trace_id,
             "question": self.question,
@@ -178,6 +185,7 @@ class AgentTrace:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentTrace":
+        """从字典恢复完整 trace，并重建嵌套的引用与步骤对象。"""
         return cls(
             trace_id=str(data.get("trace_id") or ""),
             question=str(data.get("question") or ""),
@@ -206,7 +214,7 @@ class AgentTrace:
 
 @dataclass
 class AgentRequest:
-    """Normalized input for AgentHarness.ask()."""
+    """AgentHarness.ask() 的规范化入参。"""
 
     question: str
     mode: str = "auto"
@@ -214,6 +222,7 @@ class AgentRequest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentRequest":
+        """从请求字典构造入参，模式统一转小写并过滤空群 id。"""
         chat_ids = data.get("chat_ids")
         return cls(
             question=str(data.get("question") or ""),

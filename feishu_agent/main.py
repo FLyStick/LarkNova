@@ -1,3 +1,5 @@
+"""CLI 入口：同步、体检、边界清理、统计、Agent、检索、摘要与 HTTP 服务。"""
+
 from __future__ import annotations
 
 import argparse
@@ -32,7 +34,7 @@ logger = logging.getLogger("feishu-agent")
 
 
 def settings_for_db(args: argparse.Namespace) -> Settings:
-    """Build settings with an optional CLI database override."""
+    """读取配置，并支持用命令行 --db 覆盖数据库路径。"""
     settings = Settings()
     db = getattr(args, "db", None)
     if db:
@@ -41,6 +43,7 @@ def settings_for_db(args: argparse.Namespace) -> Settings:
 
 
 def build_runner(settings: Settings, identity: str | None = None) -> SyncRunner:
+    """组装同步执行器：创建飞书客户端、初始化数据库并注入摘要工厂。"""
     client = FeishuClient(
         node=settings.node,
         cli_js=settings.lark_cli_js,
@@ -60,7 +63,7 @@ def build_runner(settings: Settings, identity: str | None = None) -> SyncRunner:
 
 
 def make_summary_factory(settings: Settings):
-    """Return a fresh SummaryRepository over the configured database."""
+    """返回摘要仓库工厂，每次调用创建独立的数据库连接。"""
     def factory() -> SummaryRepository:
         db = Database(settings.db_path)
         db.init()
@@ -69,7 +72,7 @@ def make_summary_factory(settings: Settings):
 
 
 def make_agent_factory(settings: Settings):
-    """Return a fresh AgentHarness over the configured database."""
+    """返回 Agent 执行器工厂，每次调用创建独立的数据库连接。"""
     def factory() -> AgentHarness:
         return AgentHarness(
             lambda: Database(settings.db_path),
@@ -80,6 +83,7 @@ def make_agent_factory(settings: Settings):
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
+    """执行一轮同步并输出统计，有错误时返回非零退出码。"""
     settings = settings_for_db(args)
     runner = build_runner(settings, args.identity)
     result = runner.sync_all(chat_ids=args.chat_id, full=args.full)
@@ -88,6 +92,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    """运行环境自检并输出文本或 JSON 形式的体检报告。"""
     settings = settings_for_db(args)
     client = FeishuClient(
         node=settings.node,
@@ -110,6 +115,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_boundary(args: argparse.Namespace) -> int:
+    """审计本地库中的越界群聊，--prune 时在确认后执行删除。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -129,6 +135,7 @@ def cmd_boundary(args: argparse.Namespace) -> int:
     print(json.dumps(audit, ensure_ascii=False, indent=2))
     return 0
 def cmd_stats(args: argparse.Namespace) -> int:
+    """输出本地数据库基础统计。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -137,6 +144,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 
 def cmd_metrics(args: argparse.Namespace) -> int:
+    """输出近期同步指标与最近运行批次。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -145,6 +153,7 @@ def cmd_metrics(args: argparse.Namespace) -> int:
 
 
 def cmd_agent(args: argparse.Namespace) -> int:
+    """Agent 子命令分发：ask/runs/trace/stats。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -191,6 +200,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
 
 
 def cmd_normalize(args: argparse.Namespace) -> int:
+    """查看或重建消息标准化结果，rebuild 会按当前版本重算全部消息。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -209,6 +219,7 @@ def cmd_normalize(args: argparse.Namespace) -> int:
 
 
 def cmd_index(args: argparse.Namespace) -> int:
+    """索引子命令分发：rebuild/incremental/status/consistency。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -244,6 +255,7 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    """执行混合检索并输出结果列表。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -257,6 +269,7 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_graph(args: argparse.Namespace) -> int:
+    """知识图谱子命令分发：stats/entity。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -270,6 +283,7 @@ def cmd_graph(args: argparse.Namespace) -> int:
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
+    """摘要子命令分发：rebuild/incremental/list/get/consistency/status。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -320,6 +334,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
 
 def cmd_synthetic(args: argparse.Namespace) -> int:
+    """合成语料子命令分发：seed/status。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -337,6 +352,7 @@ def cmd_synthetic(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
+    """评估子命令分发：run/report/samples。"""
     settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
@@ -387,6 +403,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    """启动 HTTP 服务，可按配置开启启动前同步与周期同步。"""
     settings = settings_for_db(args)
     runner = build_runner(settings, args.identity)
     if args.sync_on_start:
@@ -407,6 +424,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
 
     if interval and interval > 0:
+        # 周期同步放在后台守护线程，不阻塞 HTTP 主循环。
         thread = threading.Thread(
             target=_periodic_sync,
             args=(runner, interval),
@@ -427,6 +445,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def _periodic_sync(runner: SyncRunner, interval_seconds: int) -> None:
+    """后台循环：按固定间隔执行同步，异常仅记录日志不退出线程。"""
     while True:
         time.sleep(interval_seconds)
         try:
@@ -437,6 +456,7 @@ def _periodic_sync(runner: SyncRunner, interval_seconds: int) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建 CLI 参数树：顶层数据库覆盖参数和全部子命令。"""
     parser = argparse.ArgumentParser(description="Feishu message sync agent")
     parser.add_argument(
         "--db",
@@ -658,6 +678,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """CLI 入口：解析参数后调用对应子命令函数。"""
     args = build_parser().parse_args()
     return args.func(args)
 
