@@ -27,15 +27,22 @@
 - M4 核心代码：自研标准库 AgentHarness、工具注册表、rule/llm/auto 三模式、
   无依据拒答、LLM 引用校验、敏感词/预算护栏、agent_runs/agent_traces 持久化、
   agent CLI 与 /api/agent/* 鉴权限流，48 项测试通过。
+- M5 核心代码：确定性合成语料生成器、黄金测试集、eval runner 与报告，
+  `--db` 支持独立临时库隔离；合成库 115 条消息、41 条黄金用例全量通过，
+  53 项测试全绿。
 
 **主要缺口**
 
 - 机器人读取消息权限 `im:message:readonly` 未开通，当前按 `LARK_IDENTITY=user` 运行；
   bot 权限窗口已预留，机器人入群后完成复验。
 - 本地库存在 2 个历史外部群样本，M0 已提供 `boundary` 审计与显式确认清理命令。
-- 富文本已归一化并保留原始 JSON；M2 派生索引、M3 结构化摘要已建立，
-  M4 Agent Harness 已完成核心链路；M5 评测集与业务闭环尚未开始。
-- 尚未建立 Agent 工作流、评测集和部署能力。
+- 富文本已归一化并保留原始 JSON；M2 派生索引、M3 结构化摘要、M4 Agent Harness、
+  M5 评测闭环已完成核心链路。
+- 生产库消息样本不足（当前 22 条），M5 先用合成语料完成 41/41 评测基线；
+  生产数据重建后重跑 `eval run` 并更新 `resume_metrics.json`。
+- M6 交付能力已补齐：`.env.example` 模板、`scripts/bootstrap/demo/run_server.ps1`、
+  运行手册/架构文档/演示文档与 53 项 unittest 全量回归。
+- 剩余窗口：bot 权限补验、真实库重跑评测、badcase 周闭环与消融实验。
 
 ## 3. 阶段总览
 
@@ -48,6 +55,8 @@
 | M4 | Agent 应用层 | 自研标准库 Harness；工具注册表；rule/llm/auto 降级；引用溯源、拒答、敏感词；trace 持久化；API 鉴权限流 | Agent API、工具注册表、trace 回放 | 端到端问答通过；回答可溯源；可拒答；trace 可回放 | M1 | 5-7 天 |
 | M5 | 评测与业务闭环 | 人事/风控/财务/招采场景沉淀；黄金测试集；检索与问答评测；Badcase 闭环；参数调优 | 评测脚本、测试集、评测报告 | Recall/首条命中率提升；测试集 >= 30 条；Badcase 闭环率达标 | M1 | 3-5 天 |
 | M6 | 部署与最终验收 | Docker/环境变量/权限安全；运行手册；架构文档；全量回归 | 部署包、README、验收报告 | 新环境可一键启动；全部测试通过；业务演示通过 | M2 | 2-3 天 |
+
+M6 状态：已完成（user 身份基线 + 合成评测），bot/真实库复验保留为后续窗口。
 
 ## 4. 阶段明细与验收
 
@@ -234,6 +243,23 @@ M4 当前进度（2026-08-12，user 身份基线）：
 - 相比基线，Recall@5 或首条命中率有可量化提升。
 - 每周 Badcase 有记录、有归因、有验证结果。
 
+当前状态：已完成 user 身份基线（2026-08-13），真实库重跑待数据补充。
+
+M5 当前进度（2026-08-13，user 身份基线 + 合成语料）：
+
+- [x] `synthetic/seed.py`：确定性生成 7 chats / 115 条消息，覆盖人事/风控/财务/招采场景，
+  `--reset-derived` 可重建索引与摘要，全量重建幂等有测试。
+- [x] `eval/golden.py`：41 条黄金用例，含 graph/recent/refusal/search/summary 五类及
+  `_ref(chat, topic, index)` 引用协议。
+- [x] `eval/runner.py` + `eval/metrics.py`：rule 评测一键运行，输出总准确率、引用命中、
+  关键词命中、拒答准确率、延迟与 token；报告写入 `data/reports/resume_metrics.json`。
+- [x] CLI：`synthetic seed/status`、`eval run/report/samples`，`--db` 全局覆盖临时库。
+- [x] 实测：`eval run --mode rule --limit 0` 为 41/41、总准确率 100%、引用命中 90%、
+  关键词命中 100%、拒答准确率 100%、mean 45.8ms / p95 76.0ms / max 105ms。
+- [x] 53 项单元测试全绿（新增 `tests/test_synthetic.py`、`tests/test_eval.py`）。
+- [ ] 真实生产库消息充足后，用 `--db data/agent.db eval run` 重跑并更新指标。
+- [ ] badcase 周闭环与消融实验（chunk 大小/Top-K/阈值/Rerank）随真实数据补充。
+
 ### M6 部署与最终验收
 
 任务：
@@ -248,6 +274,24 @@ M4 当前进度（2026-08-12，user 身份基线）：
 - 新环境按文档执行后能完成同步、索引、摘要、问答全链路。
 - 全量测试通过，README 与实现一致。
 - 完成一次面向业务场景的演示，包含问答、引用、拒答和摘要展示。
+
+M6 当前进度（2026-08-14，user 身份基线 + 合成评测）：
+
+- [x] `.env.example`：身份、白名单、外部群、数据库、摘要预算、LLM、Agent 护栏、
+  API Token 与限流模板齐全。
+- [x] `scripts/bootstrap.ps1`：创建 `data/` 与 `data/reports/`，`.env` 幂等初始化。
+- [x] `scripts/demo.ps1`：合成语料重建 + 41 条黄金用例评测 + 报告落盘一键执行。
+- [x] `scripts/run_server.ps1`：HTTP API 启动脚本，支持 `Interval`/`Identity`/
+  `SyncOnStart` 参数，鉴权与限流从 `.env` 读取。
+- [x] `docs/USER_GUIDE.md`：环境准备、三种运行模式、常用命令、数据恢复、
+  报告覆盖注意事项与 FAQ。
+- [x] `docs/ARCHITECTURE.md`：M0-M6 架构图、模块映射、数据流、存储分层、
+  检索链路、Agent 编排、API 面与演进选项。
+- [x] `docs/DEMO.md`：一键/分步演示、最新 41/41 指标、M0-M6 验收记录。
+- [x] 全量回归：53 项 unittest 全绿。
+- [x] 报告复验：`data/reports/resume_metrics.json` 为 41/41（run_at
+  `2026-08-14T10:07:16+08:00`），累计 9847 token。
+- [ ] bot 权限开通后补验；真实库消息充足后重跑 eval 并更新报告。
 
 ## 6. 横切事项
 

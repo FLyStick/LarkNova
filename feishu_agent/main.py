@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 
 from feishu_agent.api.server import create_server
 from feishu_agent.agent import AgentHarness
@@ -12,14 +13,31 @@ from feishu_agent.agent.repository import AgentRepository
 from feishu_agent.config import Settings
 from feishu_agent.database.db import Database
 from feishu_agent.doctor import format_doctor, run_doctor
+from feishu_agent.eval import EvalRunner, load_golden
+from feishu_agent.eval.report import (
+    DEFAULT_REPORT_PATH,
+    format_report,
+    load_report,
+    write_report,
+)
 from feishu_agent.feishu.client import FeishuClient
 from feishu_agent.index.repository import IndexRepository
 from feishu_agent.summary.repository import SummaryRepository
 from feishu_agent.sync.runner import SyncRunner
+from feishu_agent.synthetic import seed_database, synthetic_status
 from feishu_agent.boundary import audit_local_db, prune_local_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("feishu-agent")
+
+
+def settings_for_db(args: argparse.Namespace) -> Settings:
+    """Build settings with an optional CLI database override."""
+    settings = Settings()
+    db = getattr(args, "db", None)
+    if db:
+        settings.db_path = Path(db)
+    return settings
 
 
 def build_runner(settings: Settings, identity: str | None = None) -> SyncRunner:
@@ -62,7 +80,7 @@ def make_agent_factory(settings: Settings):
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     runner = build_runner(settings, args.identity)
     result = runner.sync_all(chat_ids=args.chat_id, full=args.full)
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -70,7 +88,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     client = FeishuClient(
         node=settings.node,
         cli_js=settings.lark_cli_js,
@@ -92,7 +110,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_boundary(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     audit = audit_local_db(db, settings.allowed_chat_ids, settings.allow_external_chats)
@@ -111,7 +129,7 @@ def cmd_boundary(args: argparse.Namespace) -> int:
     print(json.dumps(audit, ensure_ascii=False, indent=2))
     return 0
 def cmd_stats(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     print(json.dumps(db.stats(), indent=2))
@@ -119,7 +137,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 
 def cmd_metrics(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     print(json.dumps(db.metrics(limit=args.limit), ensure_ascii=False, indent=2))
@@ -127,7 +145,7 @@ def cmd_metrics(args: argparse.Namespace) -> int:
 
 
 def cmd_agent(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     command = args.agent_command
@@ -173,7 +191,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
 
 
 def cmd_normalize(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     if args.rebuild:
@@ -191,7 +209,7 @@ def cmd_normalize(args: argparse.Namespace) -> int:
 
 
 def cmd_index(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     repo = IndexRepository(db)
@@ -226,7 +244,7 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     result = IndexRepository(db).search(
@@ -239,7 +257,7 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_graph(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     repo = IndexRepository(db)
@@ -252,7 +270,7 @@ def cmd_graph(args: argparse.Namespace) -> int:
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     db = Database(settings.db_path)
     db.init()
     repo = SummaryRepository(db, settings)
@@ -301,8 +319,75 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_synthetic(args: argparse.Namespace) -> int:
+    settings = settings_for_db(args)
+    db = Database(settings.db_path)
+    db.init()
+    if args.synthetic_command == "seed":
+        result = seed_database(
+            db,
+            limit=args.messages,
+            reset_derived=args.reset_derived,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    status = synthetic_status(db)
+    print(json.dumps(status, ensure_ascii=False, indent=2))
+    return 0 if status.get("ready") else 2
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    settings = settings_for_db(args)
+    db = Database(settings.db_path)
+    db.init()
+    if args.eval_command == "run":
+        cases = load_golden(args.golden) if args.golden else None
+        report = EvalRunner(lambda: Database(settings.db_path), settings).run(
+            limit=args.limit,
+            mode=args.mode,
+            cases=cases,
+        )
+        path = write_report(report, args.report)
+        print(format_report(report))
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "report_path": path,
+                    "synthetic": True,
+                    "mode": report["mode"],
+                    "total": report["total"],
+                    "passed": report["passed"],
+                    "accuracy": report["accuracy"],
+                    "run_at": report["run_at"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    if args.eval_command == "report":
+        report = load_report(args.report)
+        if report is None:
+            print(json.dumps({"ok": False, "error": "report_not_found"}))
+            return 1
+        print(format_report(report))
+        return 0
+    cases = load_golden(args.golden) if args.golden else load_golden()
+    if args.limit:
+        cases = cases[: args.limit]
+    print(
+        json.dumps(
+            [case.to_dict() for case in cases],
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
-    settings = Settings()
+    settings = settings_for_db(args)
     runner = build_runner(settings, args.identity)
     if args.sync_on_start:
         result = runner.sync_all()
@@ -353,6 +438,11 @@ def _periodic_sync(runner: SyncRunner, interval_seconds: int) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Feishu message sync agent")
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="override FEISHU_AGENT_DB (pass before the subcommand)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sync = sub.add_parser("sync", help="run one sync pass")
@@ -478,6 +568,83 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = summary_sub.add_parser("status", help="show summary status and counts")
     status_parser.set_defaults(func=cmd_summary)
+
+    synthetic = sub.add_parser("synthetic", help="M5 deterministic synthetic corpus")
+    synthetic_sub = synthetic.add_subparsers(dest="synthetic_command", required=True)
+
+    synthetic_seed = synthetic_sub.add_parser(
+        "seed", help="seed chats/messages and rebuild derived layers"
+    )
+    synthetic_seed.add_argument(
+        "--messages",
+        type=int,
+        default=0,
+        help="max messages to seed; 0 = full corpus",
+    )
+    synthetic_seed.add_argument(
+        "--reset-derived",
+        dest="reset_derived",
+        action="store_true",
+        default=True,
+        help="rebuild index and summaries after seeding (default)",
+    )
+    synthetic_seed.add_argument(
+        "--no-reset-derived",
+        dest="reset_derived",
+        action="store_false",
+        help="seed fact-source rows only",
+    )
+    synthetic_seed.set_defaults(func=cmd_synthetic)
+
+    synthetic_status = synthetic_sub.add_parser(
+        "status", help="verify synthetic corpus readiness"
+    )
+    synthetic_status.set_defaults(func=cmd_synthetic)
+
+    eval = sub.add_parser("eval", help="M5 golden evaluation")
+    eval_sub = eval.add_subparsers(dest="eval_command", required=True)
+
+    eval_run = eval_sub.add_parser("run", help="run golden cases and write report")
+    eval_run.add_argument(
+        "--mode",
+        choices=["rule", "auto", "llm"],
+        default="rule",
+        help="agent mode; rule is the deterministic baseline",
+    )
+    eval_run.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="max cases; 0 = all golden cases",
+    )
+    eval_run.add_argument(
+        "--golden",
+        default=None,
+        help="json golden cases file",
+    )
+    eval_run.add_argument(
+        "--report",
+        default=None,
+        help="report json path",
+    )
+    eval_run.set_defaults(func=cmd_eval)
+
+    eval_report = eval_sub.add_parser("report", help="print the latest report")
+    eval_report.add_argument(
+        "--report",
+        default=None,
+        help="report json path",
+    )
+    eval_report.set_defaults(func=cmd_eval)
+
+    eval_samples = eval_sub.add_parser("samples", help="print golden case samples")
+    eval_samples.add_argument("--limit", type=int, default=10)
+    eval_samples.add_argument(
+        "--golden",
+        default=None,
+        help="json golden cases file",
+    )
+    eval_samples.set_defaults(func=cmd_eval)
 
     serve = sub.add_parser("serve", help="start HTTP API with optional periodic sync")
     serve.add_argument("--host", default=None)

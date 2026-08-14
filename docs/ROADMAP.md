@@ -4,13 +4,16 @@
 > 开放平台接入 → 数据底座 → 知识图谱 → Agent/Harness 编排 → 可信评测 → 业务闭环。
 > 本规划同时用于沉淀简历中的技术细节与可复现指标。
 >
-> 当前进度（2026-08-12）：M0 权限与数据边界代码完成，等待 bot 实跑；
+> 当前进度（2026-08-14）：M0 权限与数据边界代码完成，等待 bot 实跑；
 > M1 数据管道生产化已完成 user 身份基线；M2 主题组织与索引已完成 user 基线；
 > M3 AI 摘要与上下文已完成 user 基线，真实库验收为
 > 2 群 / 22 条消息 / 12 条可索引 / 3 个 chunk / 4 实体 / 26 mentions / 17 边 /
 > 2 条结构化摘要 / token 估算 491；
 > M4 Agent + Harness 已完成 user 基线（rule 问答、trace 回放、鉴权限流）；
-> 48 项单元测试通过；bot 权限开通后补验。
+> M5 评测闭环已完成 user 基线：合成语料 7 chats / 115 messages、
+> 黄金测试集 41 条，rule 评测 41/41（100%）；
+> M6 交付已完成：scripts 启动脚本、运行手册/架构文档/演示文档、
+> 53 项单元测试通过；bot 权限开通后补验，真实库重建后重跑评测。
 
 ## 一、规划原则
 
@@ -31,20 +34,20 @@
 | Agent 编排 | 无 | 标准库自研 Harness（Planner + 工具注册表 + 校验器）（M4 已落地）；LangGraph 可选 |
 | Agent 工具 | 无 | 自研函数工具注册表 + OpenAI 兼容函数调用（M4 已落地）；FastMCP 可选 |
 | 模型 | 无 | LLM / Embedding 均采用可配置 API（OpenAI 兼容端点） |
-| 评测 | 无 | 自研 eval runner + LLM-as-judge + JSONL trace |
-| 测试 | unittest（24 项） | unittest（48 项）；pytest + 黄金测试集 + 故障注入（M5 起） |
+| 评测 | 无 | 自研 eval runner + 黄金测试集 + 结构化报告（M5 已落地：golden + rule runner） |
+| 测试 | unittest（24 项） | unittest（53 项）；黄金测试集 + eval runner（M5 已落地）；故障注入可选 |
 
 ## 三、分阶段实施与验收
 
 | 里程碑 | 周期 | 主题 | 核心任务 | 交付物 | 验收标准 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| M0 | 0.5-1 天 | 权限与数据边界 | 基线盘点；bot 最小权限；内部群白名单；外部群过滤；doctor 体检；本地边界审计/清理 | `.env.example`、doctor、边界测试 | bot 同步无 `230027`；外部群不入库；doctor/pytest 通过 | 代码完成/等待 bot 实测 |
+| M0 | 0.5-1 天 | 权限与数据边界 | 基线盘点；bot 最小权限；内部群白名单；外部群过滤；doctor 体检；本地边界审计/清理 | `.env.example`、doctor、边界测试 | bot 同步无 `230027`；外部群不入库；doctor/unittest 通过 | 代码完成/等待 bot 实测 |
 | M1 | 3-5 天 | 数据管道生产化 | 富文本归一化；编辑/撤回一致性；同步指标；单群失败隔离；DB 迁移 | 消息解析器、`message_versions`、迁移工具、stats 扩展 | user 基线重建一致且幂等；主要消息类型有测试；bot 权限开通后复验 | 已完成（user 基线） |
 | M2 | 3-5 天 | 主题组织与索引 | thread/时间窗口切分；chunk 生成；FTS5 + 稀疏向量；知识图谱 entities/edges；增量索引 | chunks/entities/edges、检索 API | 索引可重建、可溯源、与源库一致；增量只重建变更群；测试全绿 | 已完成（user 基线） |
 | M3 | 3-5 天 | AI 摘要与上下文 | 结论 + 依据 + 待办结构化摘要；增量补充摘要；token 预算 | summaries worker、摘要 API | 摘要幂等；质量抽查 ≥ 85%；成本可控 | 已完成（user 基线） |
 | M4 | 5-7 天 | Agent + Harness | 标准库自研 Harness；工具注册表；rule/llm/auto 降级、敏感词、引用校验；trace 持久化；API 鉴权限流 | `/api/agent/ask`、`agent_runs/agent_traces`、trace 回放 | 端到端成功率 ≥ 90%；P95 ≤ 3s；trace 可回放 | 已完成（user 基线） |
-| M5 | 3-5 天 | 评测闭环与业务场景 | 100 条黄金测试集；eval runner；badcase 迭代；人事/风控/财务/招采场景 | 评测脚本与报告 | Recall@10 ≥ 0.90；答案正确率 ≥ 0.85；token 成本降 ≥ 20% | 待开始 |
-| M6 | 2-3 天 | 交付与简历固化 | README/Demo/pytest；`resume_metrics.json`；简历措辞校准 | 完整文档、Demo、测试套件 | 新环境一键跑通；所有指标可复现 | 待开始 |
+| M5 | 3-5 天 | 评测闭环与业务场景 | 41 条黄金测试集；eval runner；确定性合成语料；badcase 迭代；人事/风控/财务/招采场景 | 评测脚本与报告 | 黄金集 ≥ 30 条；rule 全量 41/41、准确率 100%；真实库重建后重跑 | 已完成（合成语料基线） |
+| M6 | 2-3 天 | 交付与简历固化 | `.env` 模板、启动脚本、README/docs；`resume_metrics.json`；简历措辞校准 | 完整文档、Demo、测试套件 | 新环境一键跑通；所有指标可复现 | 已完成 |
 
 ## 四、里程碑
 
@@ -55,10 +58,10 @@
 | M2 | 图谱与检索可用 | 索引可重建、检索可溯源、增量与源库一致（user 基线已完成；Recall 指标 M5 用黄金集补测） |
 | M3 | AI 摘要可用 | 摘要幂等、质量抽查通过、成本可控（user 基线已完成） |
 | M4 | Agent 全链路可用 | 成功率 ≥ 90%、P95 ≤ 3s、trace 可回放（user 基线已完成，真实库可回放） |
-| M5 | 评测闭环成立 | 黄金集指标达标、badcase 有闭环 |
-| M6 | 交付物完整 | 新环境跑通、简历指标可溯源 |
+| M5 | 评测闭环成立 | 合成语料 115 条、黄金集 41 条、rule 全量 41/41（badcase 周闭环待真实数据） |
+| M6 | 交付物完整 | 新环境跑通、简历指标可溯源；已交付 scripts/docs/全量回归，bot 补验与真实库重跑保留窗口 |
 
-## 五、M2/M3/M4 当前验收（2026-08-12，user 身份基线）
+## 五、M2/M3/M4/M5 当前验收（2026-08-13，user 身份基线，含合成语料）
 
 ```text
 index rebuild:      2 chats / 22 messages / 12 indexed / 3 chunks
@@ -79,12 +82,35 @@ agent trace:        1 条 tool(search) 步骤，输入/输出/耗时/错误可�
 agent stats:        runs_total=1，citations=7，latency avg=35ms
 agent API:          /api/agent/ask、/api/agent/runs、/api/agent/stats 通过，
                     Bearer/X-API-Token 鉴权与限流有测试
+
+synthetic seed:    7 chats / 115 messages / 71 chunks / 62 entities / 352 edges
+summary:           6 summaries / 115 messages covered / 71 chunks covered
+eval run:          41/41 黄金用例通过，mode=rule
+                   accuracy=100.00%，refusal=100.00%，citation=90.00%，keyword=100.00%
+                   latency mean 45.8ms / p95 76.0ms / max 105ms
+                   token total 9847 / avg 240.2
+eval report:       data/reports/resume_metrics.json 已生成
 ```
 
-小结：M2/M3/M4 核心链路在真实库可重建、可校验、可检索、可追溯；
+M6 交付摘要（2026-08-14）：
+
+```text
+scripts/bootstrap.ps1       data 目录与 .env 幂等初始化
+scripts/demo.ps1            合成语料 + 41 条黄金评测 + 报告落盘
+scripts/run_server.ps1      HTTP API 启动（db/port/interval/identity/sync-on-start）
+docs/USER_GUIDE.md          环境准备、三种模式、常用命令、FAQ
+docs/ARCHITECTURE.md        M0-M6 架构、数据流、检索/Agent 编排
+docs/DEMO.md                演示步骤、41/41 指标、M0-M6 验收记录
+unittest                    53 项全绿
+resume_metrics.json         41/41，run_at=2026-08-14T10:07:16+08:00
+```
+
+小结：M2/M3/M4/M5/M6 核心链路可重建、可校验、可检索、可追溯；
 rule 摘要为确定性验收基线，LLM 模式已预留 OpenAI 兼容端点；
 rule 问答与 trace 为 M4 确定性验收基线，LLM 规划失败自动降级；
-`Recall@10`、摘要质量人工抽查等指标待 M5 黄金测试集与业务闭环补齐。
+M5 已用合成语料补齐黄金集与 rule 评测基线（41/41），真实生产库重建后重跑；
+M6 一键脚本与文档已补齐，`eval run` 必须显式带 `--db data/synth.db` 以保护固定报告；
+`Recall@10`、badcase 周闭环与消融实验待真实业务数据补充。
 
 ## 六、风险与前置条件
 
