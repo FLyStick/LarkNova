@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from feishu_agent.agent.protocol import Citation, ToolCall
+from feishu_agent.agent.synthesis import synthesize_answer_with_evidence
 from feishu_agent.agent.tools import ToolRegistry, ToolResult
 from feishu_agent.config import Settings
 from feishu_agent.summary.budget import estimate_tokens
@@ -278,24 +279,27 @@ class RuleEngine:
         items: list[dict[str, Any]],
         intro: str,
     ) -> RuleResult:
-        """把证据条目渲染成带编号的回答文本，并筛选出实际引用的消息。"""
+        """合成回答文本，并只保留答案真正引用的消息。"""
         selected = items[: self.settings.agent_max_evidence_items]
         if not selected:
             return self._refuse(intent, "no_evidence", "没有可引用的消息依据。")
-        lines = [intro]
-        lines.extend(self._item_lines(selected))
-        selected_ids = {
-            str(item.get("message_id") or "") for item in selected if item.get("message_id")
-        }
+        synthesized = synthesize_answer_with_evidence(
+            question,
+            selected,
+            max_chars=self.settings.agent_max_answer_chars,
+            preview_limit=self.settings.agent_evidence_preview_items,
+            intro=intro,
+        )
+        cited_ids = set(synthesized.cited_item_ids)
         citations = [
             item
             for item in self._citations
-            if item.message_id in selected_ids
+            if item.message_id in cited_ids
         ][: self.settings.agent_max_evidence_items]
         return self._finalize(
             intent=intent,
             question=question,
-            answer="\n".join(lines)[: self.settings.agent_max_answer_chars],
+            answer=synthesized.answer,
             status="ok",
             citations=citations,
         )

@@ -6,6 +6,7 @@ LLM 模式共享同一层可追溯的证据数据。
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 from feishu_agent.config import Settings
 from feishu_agent.database.db import Database
 from feishu_agent.index.repository import IndexRepository
+from feishu_agent.index.tokenizer import tokenize
 from feishu_agent.summary.repository import SummaryRepository
 
 
@@ -118,7 +120,7 @@ class ToolRegistry:
         return db
 
     def _tool_search(self, args: dict[str, Any]) -> ToolResult:
-        """调用混合检索，把命中的消息整理成带排名的证据条目。"""
+        """调用混合检索，把命中的消息整理成消息级排名的证据条目。"""
         query = _string(args, "query")
         if not query:
             return ToolResult(
@@ -128,19 +130,36 @@ class ToolRegistry:
                 "search_query_required",
             )
         limit = _int(args, "limit", self.settings.agent_max_evidence_items)
+        query_tokens = list(dict.fromkeys(tokenize(query)))
         raw = IndexRepository(self._db()).search(
             query,
             chat_ids=_chat_ids(args, "chat_ids") or None,
             limit=limit,
         )
         items: list[dict[str, Any]] = []
+        seen_message_ids: set[str] = set()
         for result in raw.get("results", []):
             chat_name = str(result.get("chat_name") or "")
-            rank = int(result.get("rank") or 0)
-            for message in result.get("messages", []):
+            chunk_rank = int(result.get("rank") or 0)
+            messages = sorted(
+                result.get("messages", []),
+                key=lambda message: _message_match_sort_key(message, query_tokens),
+            )
+            for message in messages:
+                if len(items) >= limit:
+                    break
+                message_id = str(message.get("message_id") or "")
+                if message_id and message_id in seen_message_ids:
+                    continue
                 padded = dict(message)
                 padded["chat_name"] = chat_name
-                item = _evidence_item(padded, "search", rank)
+                item = _evidence_item(padded, "search", len(items) + 1)
+                item["chunk_rank"] = chunk_rank
+                match_terms, match_score, _ = _message_match_stats(message, query_tokens)
+                item["match_terms"] = match_terms
+                item["match_score"] = match_score
+                if message_id:
+                    seen_message_ids.add(message_id)
                 if item["message_id"]:
                     items.append(item)
         return ToolResult(True, items, raw)
@@ -282,6 +301,32 @@ def _evidence_item(row: dict[str, Any], source: str, rank: int = 1) -> dict[str,
         "source": source,
         "rank": int(rank),
     }
+
+
+def _message_match_stats(
+    message: dict[str, Any],
+    query_tokens: list[str],
+) -> tuple[int, int, int]:
+    """统计单条消息命中的查询词个数、命中频次与时间戳。"""
+    counts = Counter(
+        tokenize(str(message.get("content_normalized") or message.get("content") or ""))
+    )
+    term_count = sum(1 for token in query_tokens if counts[token] > 0)
+    hit_count = sum(counts[token] for token in query_tokens)
+    create_time_ms = int(message.get("create_time_ms") or 0)
+    return term_count, hit_count, create_time_ms
+
+
+def _message_match_sort_key(
+    message: dict[str, Any],
+    query_tokens: list[str],
+) -> tuple[int, int, int]:
+    """生成消息级排序键：命中词越多越靠前，同分时保留时间顺序。"""
+    term_count, hit_count, create_time_ms = _message_match_stats(
+        message,
+        query_tokens,
+    )
+    return (-term_count, -hit_count, create_time_ms)
 
 
 def _string(args: dict[str, Any], key: str) -> str:

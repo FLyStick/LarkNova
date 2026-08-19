@@ -15,11 +15,12 @@ from feishu_agent.summary.budget import estimate_tokens
 _SYSTEM_PROMPT = (
     "你是企业飞书知识 Agent 的规划器。只输出 JSON，不要 Markdown，不要额外说明。"
     "回答必须基于可调用的本地工具，不能编造消息内容。"
+    "answer 必须直接回答用户问题；用户要求简短答案时只输出结论，不要粘贴原文。"
 )
 
 _OUTPUT_FORMAT = (
     '输出 JSON：{"tools":[{"name":"工具名","arguments":{...}}],'
-    '"answer":"最终答案，可在工具执行后填写，也可以留空",'
+    '"answer":"最终答案，直接回答用户问题；无法确定时可以留空",'
     '"citations":[{"message_id":"真实消息ID"}]}'
 )
 
@@ -91,6 +92,8 @@ class AgentLlmClient:
             f"问题：{question}\n"
             f"群范围：{scope}\n"
             f"可用工具：{tools_block}\n"
+            "要求：如果用户只要一个信息（例如「只告诉我X」），answer 只输出该信息，"
+            "不要包装说明，更不要粘贴证据原文。\n"
             f"{_OUTPUT_FORMAT}"
         )
 

@@ -52,7 +52,9 @@ M6 交付：.env 模板、启动脚本、运行手册、架构文档、演示文
   `--db` 支持独立临时库，rule 评测可一键复现；当前 115 条合成消息、
   41 条黄金用例全量通过，报告自动写入 `data/reports/resume_metrics.json`。
 - M6 已交付：`.env.example` 模板、`scripts/bootstrap.ps1`、`scripts/demo.ps1`、
-  `scripts/run_server.ps1`、运行手册/架构文档/演示文档，53 项单元测试全绿，
+  `scripts/run_server.ps1`、运行手册/架构文档/演示文档；后续 Agent 回答链路优化：
+  消息级证据重排与硬截断、短答案抽取合成、LLM answer 为空时 synthesize 兜底并标记 degraded，
+  59 项单元测试全绿，
   合成评测基线 41/41 可一键复现。
 - 机器人身份可枚举群聊，读取消息因缺少 `im:message:readonly` 返回 `230027`。
 - M0 已落地：`FEISHU_AGENT_ALLOWED_CHAT_IDS` 白名单、外部群默认排除、
@@ -85,6 +87,7 @@ M6 交付：.env 模板、启动脚本、运行手册、架构文档、演示文
 [x] M4 trace 可回放：agent runs/trace 返回完整输入/输出/耗时/引用
 [x] M4 API：/api/agent/ask、runs、stats 可用，token/限流有测试
 [x] 53 项单元测试全绿（M5 加入合成语料与评测闭环）
+[x] 59 项单元测试全绿（Agent 回答链路优化：短答案合成 + 消息级证据截断/重排）
 [x] synthetic seed：7 chats / 115 messages / 71 chunks / 62 entities / 352 edges
 [x] 合成摘要：6 summaries / 115 messages covered / 71 chunks covered，全量重建可幂等
 [x] eval run：41/41 黄金用例全量通过，总准确率 100%
@@ -178,6 +181,7 @@ FEISHU_AGENT_LLM_MODEL=
 FEISHU_AGENT_MAX_QUESTION_CHARS=2000
 FEISHU_AGENT_MAX_ANSWER_CHARS=2000
 FEISHU_AGENT_MAX_EVIDENCE_ITEMS=10
+FEISHU_AGENT_EVIDENCE_PREVIEW_ITEMS=3
 FEISHU_AGENT_MAX_STEPS=5
 FEISHU_AGENT_SENSITIVE_WORDS=password,secret,api_key,access_token,密钥,密码,身份证号,银行卡号
 FEISHU_AGENT_API_TOKEN=

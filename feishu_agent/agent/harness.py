@@ -18,6 +18,7 @@ from feishu_agent.agent.protocol import (
 )
 from feishu_agent.agent.repository import AgentRepository
 from feishu_agent.agent.rule_engine import RuleEngine
+from feishu_agent.agent.synthesis import SynthesisResult, synthesize_answer_with_evidence
 from feishu_agent.agent.tools import ToolRegistry
 from feishu_agent.config import Settings
 
@@ -264,6 +265,7 @@ class AgentHarness:
             chat_ids=chat_ids or None,
             tool_schema=self.registry.schema(),
         )
+        degraded = False
         calls = plan.get("tools") or []
         if not isinstance(calls, list):
             raise AgentGenError("LLM planning response must contain a tools list")
@@ -314,13 +316,28 @@ class AgentHarness:
             status = "refused"
             refusal_reason = "no_evidence"
         elif top_evidence:
-            answer = self._answer_from_items(top_evidence)
+            steps.append(
+                AgentStep(
+                    seq=len(steps) + 1,
+                    kind="synthesize",
+                    status="ok",
+                    tool="answer_synthesis",
+                    input={"reason": "llm_answer_empty"},
+                    output={"evidence_items": len(top_evidence)},
+                    started_at=created_at,
+                )
+            )
+            synthesized = self._answer_from_items(question, top_evidence)
+            answer = synthesized.answer
+            cited_ids = set(synthesized.cited_item_ids)
             citations = [
                 _citation_from_item(item, rank=idx)
                 for idx, item in enumerate(top_evidence, start=1)
+                if str(item.get("message_id") or "") in cited_ids
             ]
             status = "ok"
             refusal_reason = ""
+            degraded = True
         else:
             answer = "本地工具未返回可引用依据，暂时无法回答。"
             citations = []
@@ -337,6 +354,7 @@ class AgentHarness:
             status=status,
             answer=str(answer)[: self.settings.agent_max_answer_chars],
             refusal_reason=refusal_reason,
+            degraded=degraded,
             tokens=tokens,
             chat_ids=chat_ids,
             citations=citations[: self.settings.agent_max_evidence_items],
@@ -422,18 +440,19 @@ class AgentHarness:
         )
         return step, result
 
-    def _answer_from_items(self, items: list[dict[str, Any]]) -> str:
-        """在 LLM 未给答案但工具已返回证据时，按依据列表生成回答。"""
-        lines = ["根据本地工具返回的依据："]
-        for idx, item in enumerate(
-            items[: self.settings.agent_max_evidence_items],
-            start=1,
-        ):
-            when = str(item.get("create_time") or "未知时间")
-            who = str(item.get("sender_name") or "未知发送者")
-            excerpt = str(item.get("excerpt") or "")
-            lines.append(f"{idx}. [{when}] {who}：{excerpt}")
-        return "\n".join(lines)[: self.settings.agent_max_answer_chars]
+    def _answer_from_items(
+        self,
+        question: str,
+        items: list[dict[str, Any]],
+    ) -> SynthesisResult:
+        """在 LLM 未给答案但工具已返回证据时，合成简洁答案并返回引用。"""
+        return synthesize_answer_with_evidence(
+            question,
+            items,
+            max_chars=self.settings.agent_max_answer_chars,
+            preview_limit=self.settings.agent_evidence_preview_items,
+            intro="根据本地工具返回的依据：",
+        )
 
     def _llm_available(self) -> bool:
         """判断当前是否有可用的 LLM：自定义客户端或已配置接口 URL 均可。"""

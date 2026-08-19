@@ -102,6 +102,9 @@ class Settings:
         self.agent_max_evidence_items = int(
             os.environ.get("FEISHU_AGENT_MAX_EVIDENCE_ITEMS", "10")
         )
+        self.agent_evidence_preview_items = int(
+            os.environ.get("FEISHU_AGENT_EVIDENCE_PREVIEW_ITEMS", "3")
+        )
         self.agent_max_steps = int(
             os.environ.get("FEISHU_AGENT_MAX_STEPS", "5")
         )
